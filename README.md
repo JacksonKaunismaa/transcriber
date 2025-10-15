@@ -64,10 +64,29 @@ No need to activate a virtual environment! Just run:
 uv run transcribe
 ```
 
-Or if you prefer using the module directly:
+### Model Selection
+
+The tool supports three transcription models. Use the `--model` or `-m` flag to select:
 
 ```bash
-uv run python -m transcriber.main
+# Default: Whisper (most accurate)
+uv run transcribe
+
+# GPT-4o transcription (fast, high quality)
+uv run transcribe --model gpt-4o-transcribe
+
+# GPT-4o mini (faster, lower cost)
+uv run transcribe -m gpt-4o-mini-transcribe
+```
+
+**Available models:**
+- `whisper-1` (default) - Most accurate Whisper transcription model
+- `gpt-4o-transcribe` - Fast, high-quality GPT-4o-based transcription
+- `gpt-4o-mini-transcribe` - Faster, lower-cost alternative
+
+To see all options:
+```bash
+uv run transcribe --help
 ```
 
 ### What happens when you run it:

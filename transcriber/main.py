@@ -21,6 +21,7 @@ import threading
 import time
 import subprocess
 import shutil
+import argparse
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -38,8 +39,9 @@ if secrets_path.exists():
 class TranscriptionSession:
     """Manages a real-time transcription session."""
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, model: str = "whisper-1"):
         self.api_key = api_key
+        self.model = model
         self.ws: Optional[websocket.WebSocketApp] = None
         self.audio = pyaudio.PyAudio()
         self.stream = None
@@ -175,7 +177,7 @@ class TranscriptionSession:
 
     def on_open(self, ws):
         """Handle WebSocket connection open."""
-        print("[INFO] WebSocket connection established (transcription mode)")
+        print(f"[INFO] WebSocket connection established (transcription mode, model: {self.model})")
 
         # Configure transcription session to enable transcription
         session_config = {
@@ -187,7 +189,7 @@ class TranscriptionSession:
                     "threshold": 0.5
                 },
                 "input_audio_transcription": {
-                    "model": "gpt-4o-transcribe"
+                    "model": self.model
                 }
             }
         }
@@ -295,6 +297,32 @@ class TranscriptionSession:
 
 def main():
     """Main entry point."""
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description="Real-time audio transcription with OpenAI API",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Available models:
+  whisper-1            Whisper transcription model (default, most accurate)
+  gpt-4o-transcribe    GPT-4o transcription (fast, high quality)
+  gpt-4o-mini-transcribe  GPT-4o mini transcription (faster, lower cost)
+
+Examples:
+  transcribe                    # Use default whisper-1 model
+  transcribe --model gpt-4o-transcribe
+  transcribe -m whisper-1
+        """
+    )
+    parser.add_argument(
+        "-m", "--model",
+        type=str,
+        default="whisper-1",
+        choices=["whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"],
+        help="Transcription model to use (default: whisper-1)"
+    )
+
+    args = parser.parse_args()
+
     print("=" * 60)
     print("Real-Time Transcription with OpenAI")
     print("=" * 60)
@@ -309,8 +337,8 @@ def main():
         print("[ERROR] Or create a .secrets file with the same format.", file=sys.stderr)
         sys.exit(1)
 
-    # Start transcription session
-    session = TranscriptionSession(api_key)
+    # Start transcription session with selected model
+    session = TranscriptionSession(api_key, model=args.model)
 
     try:
         session.run()
