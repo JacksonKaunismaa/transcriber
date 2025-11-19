@@ -15,3 +15,7 @@ wheels/
 
 # Conversation logs
 conversations/
+
+# Toggle script runtime files
+.transcribe.pid
+.transcribe.log
