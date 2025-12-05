@@ -16,6 +16,9 @@ wheels/
 # Conversation logs
 conversations/
 
+# Test artifacts
+artifacts/
+
 # Toggle script runtime files
 .transcribe.pid
 .transcribe.log
