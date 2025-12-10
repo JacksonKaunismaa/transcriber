@@ -79,13 +79,12 @@ class TranscriptManager:
         self.allow_fillers = allow_fillers
         self.metrics = metrics
 
-        # Load and compile filters from config
+        # Load and compile filters from config (reloaded dynamically when file changes)
         if filters_config is None:
             filters_config = Path(__file__).parent / "filters.yaml"
-        filters = _load_filters(filters_config)
-        self._hallucination_filters = _compile_filters(filters.get("hallucinations", []))
-        self._filler_filters = _compile_filters(filters.get("fillers", []))
-        self._non_ascii_filters = _compile_filters(filters.get("non_ascii", []))
+        self._filters_config = filters_config
+        self._filters_mtime: float = 0
+        self._reload_filters()
 
         # Ordering system to ensure transcriptions appear in the order they were spoken
         self.item_order: List[str] = []
@@ -104,6 +103,27 @@ class TranscriptManager:
         """Set reference to shared item_speech_times dict from audio buffer."""
         self.item_speech_times = item_speech_times
 
+    def _reload_filters(self):
+        """Reload filters from config file if modified (allows live editing)."""
+        try:
+            if not self._filters_config.exists():
+                return
+
+            mtime = self._filters_config.stat().st_mtime
+            if mtime == self._filters_mtime:
+                return
+
+            filters = _load_filters(self._filters_config)
+            self._hallucination_filters = _compile_filters(filters.get("hallucinations", []))
+            self._filler_filters = _compile_filters(filters.get("fillers", []))
+            self._non_ascii_filters = _compile_filters(filters.get("non_ascii", []))
+
+            if self._filters_mtime > 0:
+                self.logger.info(f'"Reloaded filters from {self._filters_config}"')
+            self._filters_mtime = mtime
+        except Exception as e:
+            self.logger.warning(f'"Failed to reload filters: {e}"')
+
     def filter_text(self, text: str) -> str:
         """
         Filter text based on configured options and filters.yaml patterns.
@@ -115,6 +135,9 @@ class TranscriptManager:
         """
         if not text:
             return text
+
+        # Reload filters if the YAML config was modified
+        self._reload_filters()
 
         # Apply hallucination filters
         if not self.allow_bye_thank_you:
