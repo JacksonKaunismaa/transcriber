@@ -22,3 +22,6 @@ artifacts/
 # Toggle script runtime files
 .transcribe.pid
 .transcribe.log
+
+# Development notes
+CLAUDE.md
