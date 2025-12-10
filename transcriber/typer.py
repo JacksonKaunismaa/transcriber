@@ -166,12 +166,19 @@ class KeyboardTyper:
             raise
 
     def _type_with_wtype(self, text: str) -> bool:
-        """Type text using wtype (Wayland)."""
+        """Type text using wtype (Wayland), splitting to avoid keycode 22 bug."""
         try:
-            # Apply keycode 22 workaround
-            fixed_text = self._fix_wtype_keycode22(text)
+            chunks = self._split_for_wtype_keycode22(text)
+            for chunk in chunks:
+                subprocess.run(
+                    ["wtype", chunk],
+                    check=True,
+                    capture_output=True,
+                    timeout=5
+                )
+            # Add trailing space
             subprocess.run(
-                ["wtype", fixed_text + " "],
+                ["wtype", " "],
                 check=True,
                 capture_output=True,
                 timeout=5
@@ -180,32 +187,37 @@ class KeyboardTyper:
         except Exception:
             raise
 
-    def _fix_wtype_keycode22(self, text: str) -> str:
+    def _split_for_wtype_keycode22(self, text: str) -> list:
         """
-        Workaround for wtype bug where punctuation at keycode 22 gets interpreted
-        as BackSpace by XWayland/Chromium.
+        Split text to avoid wtype keycode 22 bug.
 
         wtype assigns keycodes starting at 9. If a punctuation char is the 14th
         unique character (keycode 9+13=22), XWayland interprets it as BackSpace.
 
-        Fix: if unsafe punctuation would land at position 14, prepend a zero-width
-        space to bump it to position 15.
+        Fix: split the text before any unsafe punctuation would land at position
+        14, so each chunk gets its own keycode mapping starting fresh at 9.
         """
         UNSAFE_AT_22 = set(' !"#$\'()*+,-./:;=>?@[\\]^_')
-        ZWSP = '\u200b'
 
-        # Count unique chars to see what lands at position 14
+        chunks = []
+        current_chunk = ""
         seen = set()
-        for char in text:
-            if char not in seen:
-                seen.add(char)
-                if len(seen) == 14:
-                    # This char would be at keycode 22
-                    if char in UNSAFE_AT_22:
-                        return ZWSP + text
-                    break
 
-        return text
+        for char in text:
+            # Check if adding this char would put unsafe punctuation at position 14
+            if char not in seen and len(seen) == 13 and char in UNSAFE_AT_22:
+                # Start a new chunk to reset keycode mapping
+                chunks.append(current_chunk)
+                current_chunk = ""
+                seen = set()
+
+            current_chunk += char
+            seen.add(char)
+
+        if current_chunk:
+            chunks.append(current_chunk)
+
+        return chunks
 
     def _type_with_xdotool(self, text: str) -> bool:
         """Type text using xdotool (X11)."""
