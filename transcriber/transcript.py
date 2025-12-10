@@ -16,9 +16,12 @@ import logging
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Dict, List, Optional, Set
 
 from transcriber.typer import KeyboardTyper
+
+if TYPE_CHECKING:
+    from transcriber.metrics import TranscriptionMetrics
 
 
 class TranscriptManager:
@@ -26,13 +29,15 @@ class TranscriptManager:
 
     def __init__(self, typer: KeyboardTyper, log_file: Path, logger: logging.Logger,
                  allow_bye_thank_you: bool = False, allow_non_english: bool = False,
-                 allow_fillers: bool = False):
+                 allow_fillers: bool = False,
+                 metrics: Optional["TranscriptionMetrics"] = None):
         self.typer = typer
         self.log_file = log_file
         self.logger = logger
         self.allow_bye_thank_you = allow_bye_thank_you
         self.allow_non_english = allow_non_english
         self.allow_fillers = allow_fillers
+        self.metrics = metrics
 
         # Ordering system to ensure transcriptions appear in the order they were spoken
         self.item_order: List[str] = []
@@ -67,6 +72,18 @@ class TranscriptManager:
         if not self.allow_bye_thank_you:
             text = re.sub(r'\bBye\.\s*', '', text)
             text = re.sub(r'\bThank you\.\s*', '', text)
+            # Hallucinations from background noise
+            text = re.sub(r'\bMBC\b\.?\s*', '', text)
+            text = re.sub(r'\bAmen\b\.?\s*', '', text, flags=re.IGNORECASE)
+            text = re.sub(r'\bHehe\b\.?\s*', '', text, flags=re.IGNORECASE)
+            text = re.sub(r'\bphew\b\.?\s*', '', text, flags=re.IGNORECASE)
+            text = re.sub(r'\bHuh\b\.?\s*', '', text, flags=re.IGNORECASE)
+            text = re.sub(r'\bHmph\b\.?\s*', '', text, flags=re.IGNORECASE)
+            text = re.sub(r'\b[Oo]m+\s*[Nn]om+(\s*[Nn]om+)*\b\.?\s*', '', text)  # omnomnom
+            # Repeated characters (keyboard noise, etc.)
+            text = re.sub(r'\b[Aa]+[Hh]+\b\.?\s*', '', text)  # Ahhh, aaahhhh, etc.
+            text = re.sub(r'\b[Aa]+[Rr]{4,}\b\.?\s*', '', text)  # Arrrr, arrrrrr, etc.
+            text = re.sub(r'\b([A-Za-z])\1{4,}\b\.?\s*', '', text)  # 5+ repeated chars
 
         # Filter out filler words/sounds (case-insensitive, with optional trailing punctuation)
         if not self.allow_fillers:
@@ -174,6 +191,8 @@ class TranscriptManager:
             ratio = SequenceMatcher(None, text, previous).ratio()
             if ratio >= threshold:
                 self.logger.debug(f'"Fuzzy duplicate ({ratio:.2f}): {text}"')
+                if self.metrics:
+                    self.metrics.record_duplicate_filtered()
                 return True
         return False
 
@@ -191,8 +210,10 @@ class TranscriptManager:
 
             self.log_transcript(filtered_transcript, partial=False)
             self.type_text(filtered_transcript)
-        elif transcript != filtered_transcript:
+        elif transcript and transcript != filtered_transcript:
             self.logger.debug(f'"Filtered out: {transcript}"')
+            if self.metrics:
+                self.metrics.record_content_filtered()
 
     def reset(self):
         """Reset state for a new session while preserving log file."""

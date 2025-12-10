@@ -13,9 +13,12 @@ import time
 import wave
 import logging
 import threading
-from typing import Dict, List, Optional, Tuple, Callable
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Callable
 
 from openai import OpenAI
+
+if TYPE_CHECKING:
+    from transcriber.metrics import TranscriptionMetrics
 
 
 class AudioBuffer:
@@ -25,7 +28,8 @@ class AudioBuffer:
                  on_transcript_complete: Callable[[str, str], None],
                  timeout_seconds: float = 5.0,
                  timestamp_margin_ms: int = 200,
-                 min_duration_ms: int = 300):
+                 min_duration_ms: int = 300,
+                 metrics: Optional["TranscriptionMetrics"] = None):
         """
         Args:
             openai_client: OpenAI client for Whisper API calls
@@ -34,6 +38,7 @@ class AudioBuffer:
             timeout_seconds: Seconds to wait before triggering fallback
             timestamp_margin_ms: Margin for timestamp matching
             min_duration_ms: Minimum segment duration to transcribe
+            metrics: Optional metrics tracker
         """
         self.openai_client = openai_client
         self.logger = logger
@@ -41,6 +46,7 @@ class AudioBuffer:
         self.timeout_seconds = timeout_seconds
         self.timestamp_margin_ms = timestamp_margin_ms
         self.min_duration_ms = min_duration_ms
+        self.metrics = metrics
 
         # Audio buffer: list of (timestamp_ms, audio_chunk)
         self.audio_buffer: List[Tuple[int, bytes]] = []
@@ -114,12 +120,18 @@ class AudioBuffer:
                 time_since_stopped = current_time - times["stopped_at"]
                 if time_since_stopped >= self.timeout_seconds:
                     self.logger.warning(f'"Item {item_id[:20]} timeout after {self.timeout_seconds}s, trying fallback"')
+                    if self.metrics:
+                        self.metrics.record_timeout()
 
                     transcript = self._fallback_transcribe(item_id)
 
                     if transcript:
+                        if self.metrics:
+                            self.metrics.record_fallback_success()
                         self.on_transcript_complete(item_id, transcript)
                     else:
+                        if self.metrics:
+                            self.metrics.record_fallback_failure()
                         self.logger.warning(f'"Skipping item {item_id[:20]} - fallback failed"')
                         self.on_transcript_complete(item_id, "")
 
@@ -170,6 +182,8 @@ class AudioBuffer:
 
         if expected_duration_ms < self.min_duration_ms:
             self.logger.debug(f'"Skipping short segment ({expected_duration_ms}ms) for item {item_id[:20]}"')
+            if self.metrics:
+                self.metrics.record_short_segment_skipped()
             return None
 
         best_chunks, duration_error, offset = self._find_best_chunk_match(start_ms, end_ms)

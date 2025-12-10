@@ -27,6 +27,7 @@ from transcriber.audio_device import open_audio_stream
 from transcriber.noise_reduction import create_audio_processor
 from transcriber.transcript import TranscriptManager
 from transcriber.audio_buffer import AudioBuffer
+from transcriber.metrics import TranscriptionMetrics
 
 
 class TranscriptionSession:
@@ -82,6 +83,9 @@ class TranscriptionSession:
         # Initialize OpenAI client
         self.openai_client = OpenAI(api_key=api_key)
 
+        # Metrics tracking
+        self.metrics = TranscriptionMetrics()
+
         # Initialize transcript manager
         self.transcript_manager = TranscriptManager(
             typer=self.typer,
@@ -89,7 +93,8 @@ class TranscriptionSession:
             logger=self.logger,
             allow_bye_thank_you=allow_bye_thank_you,
             allow_non_english=allow_non_english,
-            allow_fillers=allow_fillers
+            allow_fillers=allow_fillers,
+            metrics=self.metrics
         )
 
         # Initialize audio buffer for fallback transcription
@@ -99,7 +104,8 @@ class TranscriptionSession:
             on_transcript_complete=self.transcript_manager.handle_completed_transcript,
             timeout_seconds=5.0,
             timestamp_margin_ms=200,
-            min_duration_ms=300
+            min_duration_ms=300,
+            metrics=self.metrics
         )
 
         # Share item_speech_times between managers
@@ -155,6 +161,7 @@ class TranscriptionSession:
             elif msg_type == "conversation.item.input_audio_transcription.completed":
                 item_id = data.get("item_id")
                 transcript = data.get("transcript", "")
+                self.metrics.record_realtime_transcription()
                 if transcript:
                     self.transcript_manager.handle_completed_transcript(item_id, transcript)
                     self.transcript_buffer = ""
@@ -171,6 +178,7 @@ class TranscriptionSession:
             elif msg_type == "response.audio_transcript.done":
                 item_id = data.get("item_id")
                 transcript = data.get("transcript", "")
+                self.metrics.record_realtime_transcription()
                 if transcript:
                     self.transcript_manager.handle_completed_transcript(item_id, transcript)
                     self.transcript_buffer = ""
@@ -190,11 +198,13 @@ class TranscriptionSession:
 
                 if error_code == "session_expired":
                     self.logger.warning(f'"Session expired: {error_message}, will reconnect"')
+                    self.metrics.record_session_expiration()
                     self.should_reconnect = True
                     if self.ws:
                         self.ws.close()
                 else:
                     self.logger.error(f'"OpenAI API error: {error_data}"')
+                    self.metrics.record_api_error()
 
             elif msg_type == "session.created":
                 print("[INFO] Session created successfully")
@@ -210,21 +220,28 @@ class TranscriptionSession:
     def on_error(self, ws, error):
         """Handle WebSocket errors."""
         self.logger.error(f'"WebSocket error: {error}"')
+        self.metrics.record_websocket_error()
 
     def on_close(self, ws, close_status_code, close_msg):
         """Handle WebSocket connection close."""
         if close_status_code == 1000:
+            # Normal closure (intentional), don't reconnect
             self.logger.info(f'"WebSocket closed normally, code={close_status_code}, msg={close_msg}"')
-        elif close_status_code == 1006:
-            self.logger.error(f'"WebSocket connection lost unexpectedly, code={close_status_code}, msg={close_msg}"')
+        elif close_status_code == 1006 or close_status_code is None:
+            # Abnormal closure / connection lost - reconnect
+            self.logger.error(f'"WebSocket connection lost unexpectedly, code={close_status_code}, msg={close_msg}, will reconnect"')
+            self.should_reconnect = True
         else:
-            self.logger.warning(f'"WebSocket closed, code={close_status_code}, msg={close_msg}"')
+            # Other closure codes - try to reconnect
+            self.logger.warning(f'"WebSocket closed, code={close_status_code}, msg={close_msg}, will reconnect"')
+            self.should_reconnect = True
 
         if not self.should_reconnect:
             self.running = False
 
     def on_open(self, ws):
         """Handle WebSocket connection open."""
+        self.metrics.record_connection_success()
         print(f"[INFO] WebSocket connection established (transcription mode, model: {self.model})")
 
         session_config = {
@@ -288,6 +305,7 @@ class TranscriptionSession:
                         "type": "input_audio_buffer.append",
                         "audio": b64_audio
                     }))
+                    self.metrics.record_audio_chunk_sent()
 
                 except Exception:
                     if self.running:
@@ -302,14 +320,17 @@ class TranscriptionSession:
         """Reset internal state for a new session while preserving log files."""
         self.transcript_buffer = ""
         self.transcript_manager.reset()
+        self.audio_buffer.stop()  # Stop timeout thread before reset to prevent duplicate threads
         self.audio_buffer.reset()
+        # Re-link shared dict after reset (reset creates new dict)
+        self.transcript_manager.set_item_speech_times(self.audio_buffer.item_speech_times)
         self.ws = None
         self.audio_processor = None
-        print("[INFO] Session state reset for reconnection")
+        self.logger.info('"Session state reset for reconnection"')
 
     def cleanup(self):
         """Clean up resources."""
-        print("\n[INFO] Cleaning up...")
+        self.logger.info('"Cleaning up..."')
         self.running = False
         self.audio_buffer.stop()
 
@@ -332,13 +353,15 @@ class TranscriptionSession:
             except:
                 pass
 
-        print(f"[INFO] Transcription saved to: {self.log_file}")
-        print(f"[INFO] Debug event log saved to: {self.debug_log_file}")
-        print(f"[INFO] Total segments transcribed: {len(self.transcript_manager.current_transcript)}")
+        # Stop periodic metrics logging and write final summary
+        self.metrics.stop()
+        metrics_file = self.metrics.write_summary(self.conversations_dir)
+        self.logger.info(f'"Session ended. Transcription: {self.log_file}, Metrics: {metrics_file}"')
 
     def run(self):
         """Start the transcription session with automatic reconnection."""
         self.running = True
+        self.metrics.start_session(logger=self.logger)
 
         signal.signal(signal.SIGINT, lambda sig, frame: self.cleanup() or sys.exit(0))
         signal.signal(signal.SIGTERM, lambda sig, frame: self.cleanup() or sys.exit(0))
@@ -358,6 +381,7 @@ class TranscriptionSession:
                 on_close=self.on_close
             )
 
+            self.metrics.record_connection_attempt()
             if self.reconnect_attempts == 0:
                 print("[INFO] Connecting to OpenAI...")
             else:
@@ -371,6 +395,7 @@ class TranscriptionSession:
 
             if self.should_reconnect and self.running:
                 self.reconnect_attempts += 1
+                self.metrics.record_reconnection_attempt()
 
                 if self.reconnect_attempts > self.max_reconnect_attempts:
                     self.logger.error(f'"Max reconnection attempts ({self.max_reconnect_attempts}) exceeded"')
