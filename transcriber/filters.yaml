@@ -38,10 +38,10 @@ hallucinations:
 # Filler words/sounds
 # Only applied when allow_fillers=False
 fillers:
-  - pattern: '\b[Uu]+[hm]+\b[\.\,\!\?\s]*'
+  - pattern: '\b[Uu]+[hm]+\b(?!-)[\.\,\!\?]?\s?'
     flags: ignorecase
-    comment: "um, umm, uh, uuuummm, etc."
-  - pattern: '\b(?:er+m*|hm+|mhm+|uh-huh|mm+|ahem)\b[\.\,\!\?\s]*'
+    comment: "um, umm, uh, uuuummm, etc. but NOT uh-oh"
+  - pattern: '\b(?:er+m*|hm+|mhm+|uh-huh|mm+|ahem)\b[\.\,\!\?]?\s?'
     flags: ignorecase
     comment: "er, hmm, mhm, uh-huh, mm, ahem"
   - pattern: '\b[oa]h+[\.\,\!\?]+\s*'

@@ -118,16 +118,16 @@ def plot_time_saved(results: dict, output_path: Path = None):
     ax1.grid(True, alpha=0.3)
     ax1.set_ylim(bottom=0)
 
-    # Add total hours annotation
+    # Add total hours annotation (top left of plot)
     total_hours = results['total_time_saved_minutes'] / 60
-    ax1.annotate(
+    ax1.text(
+        0.02, 0.95,
         f'Total: {total_hours:.1f} hours',
-        xy=(dates[-1], cumulative[-1]),
-        xytext=(10, -10),
-        textcoords='offset points',
+        transform=ax1.transAxes,
         fontsize=12,
         fontweight='bold',
         color='green',
+        verticalalignment='top',
     )
 
     # Plot 2: Daily usage (words per day)
@@ -141,7 +141,9 @@ def plot_time_saved(results: dict, output_path: Path = None):
     ax2.xaxis.set_major_locator(mdates.AutoDateLocator())
     plt.xticks(rotation=45, ha='right')
 
-    plt.tight_layout()
+    # Adjust layout to prevent cutoff
+    plt.tight_layout(rect=[0, 0, 1, 0.96])  # Leave room for suptitle
+    fig.subplots_adjust(hspace=0.1)  # Reduce space between subplots
 
     if output_path:
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
