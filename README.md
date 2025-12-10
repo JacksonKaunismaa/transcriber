@@ -208,6 +208,27 @@ Add to `~/.xbindkeysrc`:
 
 **Important:** Make sure to click **Apply** in KDE System Settings after adding the shortcut!
 
+## Quickshell Bar Widget (Optional)
+
+If you use [Quickshell](https://quickshell.outfoxxed.me/) with the ii config, you can add a status indicator to your bar that shows whether the transcriber is running.
+
+### Installation
+
+```bash
+./scripts/install_widget.sh
+```
+
+This creates a symlink from `bar/TranscriberStatus.qml` to your Quickshell bar config.
+
+### Widget Features
+
+- **Gray** - Transcriber is off
+- **Green** - Transcriber is running
+- **Orange** - Transcriber is running but mic is muted
+- **Click** - Toggle transcriber on/off
+
+After installing, restart Quickshell: `qs reload`
+
 ## How It Works
 
 ### Keyboard Automation
@@ -321,9 +342,12 @@ transcriber/
 ├── .gitignore           # Git ignore rules
 ├── pyproject.toml       # Project configuration and dependencies
 ├── README.md            # This file
+├── bar/                 # Quickshell bar widget
+│   └── TranscriberStatus.qml  # Status indicator widget
 ├── conversations/       # Saved transcription logs (created on first run)
 ├── scripts/             # Utility scripts
-│   └── toggle_transcribe.sh  # Toggle transcription on/off
+│   ├── toggle_transcribe.sh  # Toggle transcription on/off
+│   └── install_widget.sh     # Install Quickshell widget
 ├── tools/               # Diagnostic and testing tools
 │   ├── test_audio_quality.py  # Test microphone audio quality
 │   ├── test_typing.py   # Test keyboard typing functionality
