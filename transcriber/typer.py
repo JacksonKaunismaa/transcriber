@@ -166,9 +166,9 @@ class KeyboardTyper:
             raise
 
     def _type_with_wtype(self, text: str) -> bool:
-        """Type text using wtype (Wayland), splitting to avoid keycode 22 bug."""
+        """Type text using wtype (Wayland), handling keycode 22 bug."""
         try:
-            chunks = self._split_for_wtype_keycode22(text)
+            chunks = self._split_for_wtype_keycode22(text + " ")  # Include trailing space
             for chunk in chunks:
                 subprocess.run(
                     ["wtype", chunk],
@@ -176,46 +176,60 @@ class KeyboardTyper:
                     capture_output=True,
                     timeout=5
                 )
-            # Add trailing space
-            subprocess.run(
-                ["wtype", " "],
-                check=True,
-                capture_output=True,
-                timeout=5
-            )
             return True
         except Exception:
             raise
 
     def _split_for_wtype_keycode22(self, text: str) -> list:
         """
-        Split text to avoid wtype keycode 22 bug.
+        Fix wtype keycode 22 bug where punctuation at position 14 triggers BackSpace.
 
         wtype assigns keycodes starting at 9. If a punctuation char is the 14th
         unique character (keycode 9+13=22), XWayland interprets it as BackSpace.
 
-        Fix: split the text before any unsafe punctuation would land at position
-        14, so each chunk gets its own keycode mapping starting fresh at 9.
+        Also, wtype in XWayland ignores text that starts with punctuation.
+
+        Fix: split text so unsafe punct never lands at position 14. Split point is
+        chosen so the new chunk starts with an alphanumeric (required by XWayland).
+        We find the last alphanumeric BEFORE where the unsafe punct would occur.
         """
         UNSAFE_AT_22 = set(' !"#$\'()*+,-./:;=>?@[\\]^_')
 
+        if not text:
+            return []
+
         chunks = []
-        current_chunk = ""
-        seen = set()
+        start = 0
 
-        for char in text:
-            # Check if adding this char would put unsafe punctuation at position 14
-            if char not in seen and len(seen) == 13 and char in UNSAFE_AT_22:
-                # Start a new chunk to reset keycode mapping
-                chunks.append(current_chunk)
-                current_chunk = ""
-                seen = set()
+        while start < len(text):
+            # Find where position 14 would be for this chunk
+            seen = set()
+            pos14_index = None
+            last_alnum_before_14 = None
 
-            current_chunk += char
-            seen.add(char)
+            for i in range(start, len(text)):
+                char = text[i]
+                if char not in seen:
+                    seen.add(char)
+                    if len(seen) == 14:
+                        pos14_index = i
+                        break
+                if char.isalnum():
+                    last_alnum_before_14 = i
 
-        if current_chunk:
-            chunks.append(current_chunk)
+            # Check if position 14 has unsafe punct
+            if pos14_index is not None and text[pos14_index] in UNSAFE_AT_22:
+                # Need to split before pos14. Find split point at last alnum.
+                if last_alnum_before_14 is not None and last_alnum_before_14 > start:
+                    # Split right after the character BEFORE last_alnum_before_14
+                    # so next chunk starts with that alnum
+                    chunks.append(text[start:last_alnum_before_14])
+                    start = last_alnum_before_14
+                    continue
+
+            # No split needed, take the rest
+            chunks.append(text[start:])
+            break
 
         return chunks
 
