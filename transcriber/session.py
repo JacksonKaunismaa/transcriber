@@ -34,7 +34,7 @@ class TranscriptionSession:
     """Manages a real-time transcription session."""
 
     def __init__(self, api_key: str, model: str = "whisper-1",
-                 allow_bye_thank_you: bool = False, allow_non_english: bool = False,
+                 allow_bye_thank_you: bool = False, allow_non_ascii: bool = False,
                  allow_fillers: bool = False,
                  noise_suppression: int = 0, auto_gain: float = 1.0):
         self.api_key = api_key
@@ -92,7 +92,7 @@ class TranscriptionSession:
             log_file=self.log_file,
             logger=self.logger,
             allow_bye_thank_you=allow_bye_thank_you,
-            allow_non_english=allow_non_english,
+            allow_non_ascii=allow_non_ascii,
             allow_fillers=allow_fillers,
             metrics=self.metrics
         )
@@ -102,7 +102,7 @@ class TranscriptionSession:
             openai_client=self.openai_client,
             logger=self.logger,
             on_transcript_complete=self.transcript_manager.handle_completed_transcript,
-            timeout_seconds=5.0,
+            timeout_seconds=2.5,
             timestamp_margin_ms=200,
             min_duration_ms=300,
             metrics=self.metrics
@@ -255,7 +255,7 @@ class TranscriptionSession:
 
         ws.send(json.dumps(session_config))
         print("[INFO] Transcription enabled (keepalive: active)")
-        print("[INFO] Fallback transcription enabled (5s timeout)")
+        print("[INFO] Fallback transcription enabled (2.5s timeout)")
         print("[INFO] Starting audio capture...")
         print("[INFO] Speak into your microphone. Transcription will be typed and logged.")
         print("[INFO] The session will stay active indefinitely - silence is OK!")

@@ -38,7 +38,9 @@ class TranscriptionMetrics:
     realtime_transcriptions: int = 0  # Completed via realtime API
     timeouts: int = 0  # Items that timed out
     fallback_successes: int = 0  # Fallback transcriptions that worked
-    fallback_failures: int = 0  # Fallback transcriptions that failed
+    fallback_failures_short: int = 0  # Fallback failed, segment < 1s (likely noise)
+    fallback_failures_long: int = 0  # Fallback failed, segment >= 1s (real failure)
+    fallback_races: int = 0  # Realtime API returned after fallback already started
     short_segments_skipped: int = 0  # Too short to transcribe
 
     # Filtering metrics
@@ -91,7 +93,7 @@ class TranscriptionMetrics:
                 f"METRICS [{minutes}m] | "
                 f"realtime:{self.realtime_transcriptions} "
                 f"timeouts:{self.timeouts} ({timeout_pct}%) "
-                f"fallback_ok:{self.fallback_successes} fallback_fail:{self.fallback_failures} | "
+                f"fallback_ok:{self.fallback_successes} fail_short:{self.fallback_failures_short} fail_long:{self.fallback_failures_long} races:{self.fallback_races} | "
                 f"filtered:{self.content_filtered} dupes:{self.duplicates_filtered} | "
                 f"errors: ws={self.websocket_errors} api={self.api_errors}"
             )
@@ -143,10 +145,18 @@ class TranscriptionMetrics:
         with self._lock:
             self.fallback_successes += 1
 
-    def record_fallback_failure(self):
-        """Record a failed fallback transcription."""
+    def record_fallback_failure(self, duration_ms: int = 0):
+        """Record a failed fallback transcription, categorized by duration."""
         with self._lock:
-            self.fallback_failures += 1
+            if duration_ms >= 1000:
+                self.fallback_failures_long += 1
+            else:
+                self.fallback_failures_short += 1
+
+    def record_fallback_race(self):
+        """Record when realtime API returned after fallback already started."""
+        with self._lock:
+            self.fallback_races += 1
 
     def record_short_segment_skipped(self):
         """Record a segment skipped due to short duration."""
@@ -205,7 +215,9 @@ class TranscriptionMetrics:
                 "realtime_transcriptions": self.realtime_transcriptions,
                 "timeouts": self.timeouts,
                 "fallback_successes": self.fallback_successes,
-                "fallback_failures": self.fallback_failures,
+                "fallback_failures_short": self.fallback_failures_short,
+                "fallback_failures_long": self.fallback_failures_long,
+                "fallback_races": self.fallback_races,
                 "short_segments_skipped": self.short_segments_skipped,
 
                 # Filtering
@@ -249,7 +261,9 @@ class TranscriptionMetrics:
             f"  Realtime API success:   {summary['realtime_transcriptions']}",
             f"  Timeouts (needed fallback): {summary['timeouts']} ({summary['timeout_rate_pct']}%)",
             f"  Fallback successes:     {summary['fallback_successes']}",
-            f"  Fallback failures:      {summary['fallback_failures']}",
+            f"  Fallback fail (<1s):    {summary['fallback_failures_short']}",
+            f"  Fallback fail (>=1s):   {summary['fallback_failures_long']}",
+            f"  Fallback races:         {summary['fallback_races']}",
         ]
 
         if summary['timeouts'] > 0:

@@ -1,0 +1,59 @@
+# Transcription filters configuration
+# Each filter has a pattern (regex) and optional flags (ignorecase, multiline, dotall)
+# Filters are applied in order within each category
+
+# Hallucinations from background noise / model artifacts
+# Only applied when allow_bye_thank_you=False
+hallucinations:
+  # Common false positives
+  - pattern: '\bBye\.\s*'
+  - pattern: '\bThank you\.\s*'
+  - pattern: '\bMBC\b\.?\s*'
+  - pattern: '\bAmen\b\.?\s*'
+    flags: ignorecase
+  - pattern: '\bHehe\b\.?\s*'
+    flags: ignorecase
+  - pattern: '\bphew\b\.?\s*'
+    flags: ignorecase
+  - pattern: '\bHuh\b\.?\s*'
+    flags: ignorecase
+  - pattern: '\bHmph\b\.?\s*'
+    flags: ignorecase
+  - pattern: '\bRawr\b\.?\s*'
+    flags: ignorecase
+  - pattern: '\b[Oo]m+\s*[Nn]om+(\s*[Nn]om+)*\b\.?\s*'
+
+  # YouTube outro hallucinations
+  - pattern: "(?:But )?[Ii]f you(?:'re| are) watching this,? make sure to (?:like|subscribe).*(?:Bye[ -]?bye|next time)\\.?\\s*"
+    flags: ignorecase
+
+  # Repeated characters (keyboard noise, etc.)
+  - pattern: '\b[Aa]+[Hh]+\b\.?\s*'
+    comment: "Ahhh, aaahhhh, etc."
+  - pattern: '\b[AaRr]+[Rr]{4,}\b\.?\s*'
+    comment: "Arrrr, Rrrrrr, etc."
+  - pattern: '\b([A-Za-z])\1{4,}\b\.?\s*'
+    comment: "5+ repeated chars"
+
+# Filler words/sounds
+# Only applied when allow_fillers=False
+fillers:
+  - pattern: '\b[Uu]+[hm]+\b[\.\,\!\?\s]*'
+    flags: ignorecase
+    comment: "um, umm, uh, uuuummm, etc."
+  - pattern: '\b(?:er+m*|hm+|mhm+|uh-huh|mm+|ahem)\b[\.\,\!\?\s]*'
+    flags: ignorecase
+    comment: "er, hmm, mhm, uh-huh, mm, ahem"
+  - pattern: '\b[oa]h+[\.\,\!\?]+\s*'
+    flags: ignorecase
+    comment: "oh, ah only when standalone with punctuation"
+  - pattern: '^\s*\.{2,}\s*$'
+    comment: "Just ellipsis"
+  - pattern: '^\s*,\s*'
+    comment: "Leading comma"
+
+# Non-ASCII character filter
+# Only applied when allow_non_ascii=False
+non_ascii:
+  - pattern: '[^\x20-\x7E]'
+    comment: "Remove non-ASCII printable characters"

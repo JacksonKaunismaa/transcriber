@@ -39,7 +39,7 @@ Examples:
   transcribe --model gpt-4o-transcribe
   transcribe -m whisper-1
   transcribe --allow-bye-thank-you    # Allow "Bye." and "Thank you."
-  transcribe --allow-non-english      # Allow non-English characters
+  transcribe --allow-non-ascii        # Allow non-ASCII characters
   transcribe --noise-suppression 2    # Enable noise suppression (0-4)
   transcribe --gain 2.0              # Apply 2x volume gain
   transcribe --no-audio-processing   # Disable all audio processing
@@ -57,9 +57,9 @@ Examples:
         help="Don't filter out 'Bye.' and 'Thank you.' (common false positives)"
     )
     parser.add_argument(
-        "--allow-non-english",
+        "--allow-non-ascii",
         action="store_true",
-        help="Allow non-English characters in transcription"
+        help="Allow non-ASCII characters in transcription"
     )
     parser.add_argument(
         "--allow-fillers",
@@ -112,7 +112,7 @@ Examples:
         api_key,
         model=args.model,
         allow_bye_thank_you=args.allow_bye_thank_you,
-        allow_non_english=args.allow_non_english,
+        allow_non_ascii=args.allow_non_ascii,
         allow_fillers=args.allow_fillers,
         noise_suppression=noise_suppression,
         auto_gain=gain,

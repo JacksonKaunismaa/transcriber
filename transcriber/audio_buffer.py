@@ -26,7 +26,7 @@ class AudioBuffer:
 
     def __init__(self, openai_client: OpenAI, logger: logging.Logger,
                  on_transcript_complete: Callable[[str, str], None],
-                 timeout_seconds: float = 5.0,
+                 timeout_seconds: float = 2.5,
                  timestamp_margin_ms: int = 200,
                  min_duration_ms: int = 300,
                  metrics: Optional["TranscriptionMetrics"] = None):
@@ -123,6 +123,11 @@ class AudioBuffer:
                     if self.metrics:
                         self.metrics.record_timeout()
 
+                    # Calculate segment duration for metrics
+                    duration_ms = 0
+                    if "start_ms" in times and "end_ms" in times:
+                        duration_ms = times["end_ms"] - times["start_ms"]
+
                     transcript = self._fallback_transcribe(item_id)
 
                     if transcript:
@@ -131,8 +136,8 @@ class AudioBuffer:
                         self.on_transcript_complete(item_id, transcript)
                     else:
                         if self.metrics:
-                            self.metrics.record_fallback_failure()
-                        self.logger.warning(f'"Skipping item {item_id[:20]} - fallback failed"')
+                            self.metrics.record_fallback_failure(duration_ms)
+                        self.logger.warning(f'"Skipping item {item_id[:20]} - fallback failed ({duration_ms}ms)"')
                         self.on_transcript_complete(item_id, "")
 
     def _find_best_chunk_match(self, start_ms: int, end_ms: int) -> Tuple[Optional[List[bytes]], float, Optional[int]]:

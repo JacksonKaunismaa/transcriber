@@ -16,7 +16,9 @@ import logging
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+
+import yaml
 
 from transcriber.typer import KeyboardTyper
 
@@ -24,20 +26,66 @@ if TYPE_CHECKING:
     from transcriber.metrics import TranscriptionMetrics
 
 
+def _load_filters(config_path: Path) -> dict:
+    """Load filter patterns from YAML config file."""
+    if not config_path.exists():
+        return {"hallucinations": [], "fillers": [], "non_english": []}
+
+    with open(config_path) as f:
+        return yaml.safe_load(f) or {}
+
+
+def _compile_filters(filter_list: List[dict]) -> List[Tuple[re.Pattern, str]]:
+    """Compile a list of filter definitions into regex patterns.
+
+    Returns list of (compiled_pattern, original_pattern_string) tuples.
+    """
+    compiled = []
+    for item in filter_list:
+        pattern = item.get("pattern", "")
+        if not pattern:
+            continue
+
+        flags = 0
+        flag_str = item.get("flags", "")
+        if "ignorecase" in flag_str.lower():
+            flags |= re.IGNORECASE
+        if "multiline" in flag_str.lower():
+            flags |= re.MULTILINE
+        if "dotall" in flag_str.lower():
+            flags |= re.DOTALL
+
+        try:
+            compiled.append((re.compile(pattern, flags), pattern))
+        except re.error as e:
+            logging.warning(f"Invalid filter pattern '{pattern}': {e}")
+
+    return compiled
+
+
 class TranscriptManager:
     """Manages transcript filtering, ordering, deduplication, and output."""
 
     def __init__(self, typer: KeyboardTyper, log_file: Path, logger: logging.Logger,
-                 allow_bye_thank_you: bool = False, allow_non_english: bool = False,
+                 allow_bye_thank_you: bool = False, allow_non_ascii: bool = False,
                  allow_fillers: bool = False,
-                 metrics: Optional["TranscriptionMetrics"] = None):
+                 metrics: Optional["TranscriptionMetrics"] = None,
+                 filters_config: Optional[Path] = None):
         self.typer = typer
         self.log_file = log_file
         self.logger = logger
         self.allow_bye_thank_you = allow_bye_thank_you
-        self.allow_non_english = allow_non_english
+        self.allow_non_ascii = allow_non_ascii
         self.allow_fillers = allow_fillers
         self.metrics = metrics
+
+        # Load and compile filters from config
+        if filters_config is None:
+            filters_config = Path(__file__).parent / "filters.yaml"
+        filters = _load_filters(filters_config)
+        self._hallucination_filters = _compile_filters(filters.get("hallucinations", []))
+        self._filler_filters = _compile_filters(filters.get("fillers", []))
+        self._non_ascii_filters = _compile_filters(filters.get("non_ascii", []))
 
         # Ordering system to ensure transcriptions appear in the order they were spoken
         self.item_order: List[str] = []
@@ -58,49 +106,30 @@ class TranscriptManager:
 
     def filter_text(self, text: str) -> str:
         """
-        Filter text based on configured options.
+        Filter text based on configured options and filters.yaml patterns.
 
         By default:
-        - Filters out "Bye." and "Thank you." (common false positives)
+        - Filters out hallucinations (common false positives from background noise)
         - Filters out filler words (um, uh, hmm, etc.)
         - Filters out non-English characters
         """
         if not text:
             return text
 
-        # Filter out common false positive strings
+        # Apply hallucination filters
         if not self.allow_bye_thank_you:
-            text = re.sub(r'\bBye\.\s*', '', text)
-            text = re.sub(r'\bThank you\.\s*', '', text)
-            # Hallucinations from background noise
-            text = re.sub(r'\bMBC\b\.?\s*', '', text)
-            text = re.sub(r'\bAmen\b\.?\s*', '', text, flags=re.IGNORECASE)
-            text = re.sub(r'\bHehe\b\.?\s*', '', text, flags=re.IGNORECASE)
-            text = re.sub(r'\bphew\b\.?\s*', '', text, flags=re.IGNORECASE)
-            text = re.sub(r'\bHuh\b\.?\s*', '', text, flags=re.IGNORECASE)
-            text = re.sub(r'\bHmph\b\.?\s*', '', text, flags=re.IGNORECASE)
-            text = re.sub(r'\b[Oo]m+\s*[Nn]om+(\s*[Nn]om+)*\b\.?\s*', '', text)  # omnomnom
-            # Repeated characters (keyboard noise, etc.)
-            text = re.sub(r'\b[Aa]+[Hh]+\b\.?\s*', '', text)  # Ahhh, aaahhhh, etc.
-            text = re.sub(r'\b[Aa]+[Rr]{4,}\b\.?\s*', '', text)  # Arrrr, arrrrrr, etc.
-            text = re.sub(r'\b([A-Za-z])\1{4,}\b\.?\s*', '', text)  # 5+ repeated chars
+            for pattern, _ in self._hallucination_filters:
+                text = pattern.sub('', text)
 
-        # Filter out filler words/sounds (case-insensitive, with optional trailing punctuation)
+        # Apply filler filters
         if not self.allow_fillers:
-            # Handles variations like "um", "umm", "ummm", "Um...", "Uh,", etc.
-            filler_pattern = r'\b(?:u[hm]+|er+m*|hm+|mhm+|uh-huh|mm+|ahem)\b[\.\,\!\?\s]*'
-            text = re.sub(filler_pattern, '', text, flags=re.IGNORECASE)
-            # "oh" and "ah" only when standalone with punctuation (not part of phrase)
-            text = re.sub(r'\b[oa]h+[\.\,\!\?]+\s*', '', text, flags=re.IGNORECASE)
+            for pattern, _ in self._filler_filters:
+                text = pattern.sub('', text)
 
-            # Filter out standalone ellipsis or trailing filler artifacts
-            text = re.sub(r'^\s*\.{2,}\s*$', '', text)  # Just "..." or ". . ."
-            text = re.sub(r'^\s*,\s*', '', text)  # Leading comma
-
-        # Filter out non-English characters
-        if not self.allow_non_english:
-            # Keep only ASCII printable characters
-            text = re.sub(r'[^\x20-\x7E]', '', text)
+        # Apply non-ASCII filters
+        if not self.allow_non_ascii:
+            for pattern, _ in self._non_ascii_filters:
+                text = pattern.sub('', text)
 
         # Clean up multiple spaces
         text = re.sub(r'\s+', ' ', text)
@@ -149,6 +178,8 @@ class TranscriptManager:
             if item_id and item_id in self.item_speech_times:
                 if self.item_speech_times[item_id].get("completed"):
                     self.logger.debug(f'"Skipping already-completed item {item_id[:20]}"')
+                    if self.metrics:
+                        self.metrics.record_fallback_race()
                     return
                 self.item_speech_times[item_id]["completed"] = True
 
