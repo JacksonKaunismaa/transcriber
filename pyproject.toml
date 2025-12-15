@@ -12,6 +12,9 @@ dependencies = [
     "numpy>=2.0.0",
 ]
 
+[project.optional-dependencies]
+analysis = ["scipy>=1.10.0", "matplotlib>=3.7.0"]
+
 [project.scripts]
 transcribe = "transcriber.main:main"
 
