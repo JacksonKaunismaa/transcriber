@@ -2,7 +2,7 @@
 """
 Generate a report of time saved by voice transcription.
 
-Uses pre-computed ratio distributions (no personal text).
+Uses pre-computed ratio distributions and CPS values.
 """
 
 import json
@@ -18,35 +18,6 @@ from scipy.stats import gaussian_kde
 
 RATIO_FILE = Path(__file__).parent / "ratio_distributions.json"
 CONVERSATIONS_DIR = Path(__file__).parent.parent / "conversations"
-TYPING_LOG = CONVERSATIONS_DIR / "typing_log.txt"
-
-# CPS computation parameters
-MIN_BURST_SECONDS = 0.5
-MAX_GAP_SECONDS = 2.0
-
-# Typing data before Dvorak fix (2025-12-10 18:18) is corrupted
-TYPING_MIN_DATE = datetime(2025, 12, 10, 18, 18)
-
-
-def parse_typing_log() -> list[dict]:
-    """Parse typing log into entries with start/end times and char count."""
-    entries = []
-    pattern = r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?) -> (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?)\] (.+)'
-
-    if not TYPING_LOG.exists():
-        return entries
-
-    for line in TYPING_LOG.read_text().split('\n'):
-        match = re.match(pattern, line)
-        if match:
-            start_str, end_str, text = match.groups()
-            fmt = "%Y-%m-%d %H:%M:%S.%f" if '.' in start_str else "%Y-%m-%d %H:%M:%S"
-            start = datetime.strptime(start_str, fmt)
-            fmt = "%Y-%m-%d %H:%M:%S.%f" if '.' in end_str else "%Y-%m-%d %H:%M:%S"
-            end = datetime.strptime(end_str, fmt)
-            entries.append({'start': start, 'end': end, 'text': text, 'chars': len(text)})
-
-    return entries
 
 
 def parse_speech_transcripts() -> list[dict]:
@@ -66,68 +37,8 @@ def parse_speech_transcripts() -> list[dict]:
     return entries
 
 
-def compute_typing_burst_cps(entries: list[dict], min_date: datetime = None) -> dict:
-    """Compute typing burst CPS from entries with start/end times."""
-    if min_date:
-        entries = [e for e in entries if e['start'] >= min_date]
-
-    cps_values = []
-    total_chars = 0
-    total_time = 0
-
-    for entry in entries:
-        duration = (entry['end'] - entry['start']).total_seconds()
-        if duration < MIN_BURST_SECONDS:
-            continue
-        chars = entry['chars']
-        cps = chars / duration
-        if cps > 20:  # Filter unrealistic CPS
-            continue
-        cps_values.append(cps)
-        total_chars += chars
-        total_time += duration
-
-    if not cps_values:
-        return {'aggregate_cps': 0, 'n': 0}
-
-    return {
-        'aggregate_cps': total_chars / total_time if total_time > 0 else 0,
-        'n': len(cps_values),
-    }
-
-
-def compute_speech_burst_cps(entries: list[dict]) -> dict:
-    """Compute speech burst CPS using gaps between consecutive entries."""
-    if len(entries) < 2:
-        return {'aggregate_cps': 0, 'n': 0}
-
-    cps_values = []
-    total_chars = 0
-    total_time = 0
-
-    for i in range(len(entries) - 1):
-        gap = (entries[i + 1]['timestamp'] - entries[i]['timestamp']).total_seconds()
-        if gap > MAX_GAP_SECONDS or gap < 0.1:
-            continue
-        chars = entries[i]['chars']
-        cps = chars / gap
-        if cps > 30:  # Filter unrealistic CPS
-            continue
-        cps_values.append(cps)
-        total_chars += chars
-        total_time += gap
-
-    if not cps_values:
-        return {'aggregate_cps': 0, 'n': 0}
-
-    return {
-        'aggregate_cps': total_chars / total_time if total_time > 0 else 0,
-        'n': len(cps_values),
-    }
-
-
 def load_ratio_distributions() -> dict:
-    """Load pre-computed ratio distributions (no personal text)."""
+    """Load pre-computed ratio distributions and CPS values."""
     if not RATIO_FILE.exists():
         raise FileNotFoundError(f"Ratio file not found: {RATIO_FILE}")
 
@@ -149,6 +60,8 @@ def load_ratio_distributions() -> dict:
     return {
         "s2c": calc_stats(data["s2c_ratios"]),
         "t2c": calc_stats(data["t2c_ratios"]),
+        "typing_cps": data["typing_cps"],
+        "speech_cps": data["speech_cps"],
     }
 
 
@@ -158,19 +71,14 @@ def main():
 
     s2c_stats = ratios["s2c"]
     t2c_stats = ratios["t2c"]
+    typing_cps = ratios["typing_cps"]
+    speech_cps = ratios["speech_cps"]
 
-    # Load speech data (just chars and timestamps, not text content)
+    # Load user's speech data
     speech_entries = parse_speech_transcripts()
     total_speech_chars = sum(e['chars'] for e in speech_entries)
 
-    # Compute CPS
-    typing_entries = parse_typing_log()
-    typing_stats = compute_typing_burst_cps(typing_entries, min_date=TYPING_MIN_DATE)
-    speech_stats = compute_speech_burst_cps(speech_entries)
-    typing_cps = typing_stats['aggregate_cps']
-    speech_cps = speech_stats['aggregate_cps']
-
-    # Compute speedups using t2c directly
+    # Compute speedups using pre-computed values
     s2c = s2c_stats["mean"]
     t2c = t2c_stats["mean"]
     content_speedup = speech_cps / (t2c * typing_cps)
@@ -186,7 +94,7 @@ def main():
     print(f"Speech -> Core (s2c): {s2c_stats['mean']:.3f} +/- {s2c_stats['stderr']:.3f} (n={s2c_stats['n']})")
     print(f"Typed -> Core (t2c):  {t2c_stats['mean']:.3f} +/- {t2c_stats['stderr']:.3f} (n={t2c_stats['n']})")
 
-    print(f"\n--- CPS ---")
+    print(f"\n--- CPS (pre-computed) ---")
     print(f"Typing: {typing_cps:.2f} chars/sec")
     print(f"Speech: {speech_cps:.2f} chars/sec")
 
@@ -286,8 +194,6 @@ def main():
 
     # 4. Cumulative time saved with 95% confidence interval (bottom-right)
     # Confidence bounds from uncertainty in s2c and t2c
-    # Optimistic: high s2c, low t2c (more compression = more savings)
-    # Pessimistic: low s2c, high t2c (less compression = less savings)
     z = 1.96  # 95% CI
     s2c_lo = s2c_stats['mean'] - z * s2c_stats['stderr']
     s2c_hi = s2c_stats['mean'] + z * s2c_stats['stderr']
