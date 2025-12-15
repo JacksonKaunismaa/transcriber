@@ -5,6 +5,7 @@ Generate a report of time saved by voice transcription.
 Uses pre-computed ratio distributions and CPS values.
 """
 
+import argparse
 import json
 import math
 import re
@@ -17,15 +18,15 @@ import matplotlib.dates as mdates
 from scipy.stats import gaussian_kde
 
 RATIO_FILE = Path(__file__).parent / "ratio_distributions.json"
-CONVERSATIONS_DIR = Path(__file__).parent.parent / "conversations"
+DEFAULT_CONVERSATIONS_DIR = Path(__file__).parent.parent / "conversations"
 
 
-def parse_speech_transcripts() -> list[dict]:
+def parse_speech_transcripts(conversations_dir: Path) -> list[dict]:
     """Parse speech transcripts into entries with timestamps and char count."""
     entries = []
     pattern = r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] (.+)'
 
-    for filepath in sorted(CONVERSATIONS_DIR.glob("transcription_*.txt")):
+    for filepath in sorted(conversations_dir.glob("transcription_*.txt")):
         for line in filepath.read_text().split('\n'):
             match = re.match(pattern, line)
             if match:
@@ -66,6 +67,16 @@ def load_ratio_distributions() -> dict:
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Generate time saved report from transcription data")
+    parser.add_argument(
+        "conversations_dir",
+        nargs="?",
+        type=Path,
+        default=DEFAULT_CONVERSATIONS_DIR,
+        help=f"Path to conversations directory (default: {DEFAULT_CONVERSATIONS_DIR})"
+    )
+    args = parser.parse_args()
+
     print("Loading data...")
     ratios = load_ratio_distributions()
 
@@ -75,7 +86,7 @@ def main():
     speech_cps = ratios["speech_cps"]
 
     # Load user's speech data
-    speech_entries = parse_speech_transcripts()
+    speech_entries = parse_speech_transcripts(args.conversations_dir)
     total_speech_chars = sum(e['chars'] for e in speech_entries)
 
     # Compute speedups using pre-computed values
