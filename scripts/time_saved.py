@@ -1,249 +1,211 @@
 #!/usr/bin/env python3
 """
-Calculate and visualize time saved by using voice transcription vs typing.
+Generate a report of time saved by voice transcription.
 
-Reads all transcription logs, counts words, and estimates time saved based on
-typing speed vs speaking speed.
+Uses pre-computed ratio distributions (no personal text).
 """
 
-import argparse
-import re
-from collections import defaultdict
-from datetime import datetime
+import json
+import math
+import sys
 from pathlib import Path
 
-try:
-    import matplotlib.pyplot as plt
-    import matplotlib.dates as mdates
-    HAS_MATPLOTLIB = True
-except ImportError:
-    HAS_MATPLOTLIB = False
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+
+# Add tools/time_analysis to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent / "tools" / "time_analysis"))
+
+from compute_cps import (
+    parse_speech_transcripts,
+    parse_typing_log,
+    compute_typing_burst_cps,
+    compute_speech_burst_cps,
+)
+
+RATIO_FILE = Path(__file__).parent / "ratio_distributions.json"
 
 
-def parse_transcription_file(filepath: Path) -> list[tuple[datetime, str]]:
-    """Parse a transcription log file and return list of (timestamp, text) tuples."""
-    entries = []
-    pattern = re.compile(r'^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] (.+)$')
+def load_ratio_distributions() -> dict:
+    """Load pre-computed ratio distributions (no personal text)."""
+    if not RATIO_FILE.exists():
+        raise FileNotFoundError(f"Ratio file not found: {RATIO_FILE}")
 
-    with open(filepath, 'r', encoding='utf-8') as f:
-        for line in f:
-            match = pattern.match(line.strip())
-            if match:
-                timestamp = datetime.strptime(match.group(1), '%Y-%m-%d %H:%M:%S')
-                text = match.group(2)
-                entries.append((timestamp, text))
+    with open(RATIO_FILE) as f:
+        data = json.load(f)
 
-    return entries
-
-
-def count_words(text: str) -> int:
-    """Count words in text using standard WPM definition (characters / 5)."""
-    return len(text) // 5
-
-
-def calculate_time_saved(
-    conversations_dir: Path,
-    typing_wpm: float = 90,
-    speaking_wpm: float = 240,
-) -> dict:
-    """
-    Calculate time saved from all transcription logs.
-
-    Returns dict with:
-        - daily_words: {date: word_count}
-        - daily_time_saved_minutes: {date: minutes_saved}
-        - total_words: int
-        - total_time_saved_minutes: float
-    """
-    daily_words = defaultdict(int)
-
-    # Find all transcription files
-    transcription_files = sorted(conversations_dir.glob('transcription_*.txt'))
-
-    for filepath in transcription_files:
-        entries = parse_transcription_file(filepath)
-        for timestamp, text in entries:
-            date = timestamp.date()
-            words = count_words(text)
-            daily_words[date] += words
-
-    # Calculate time saved per day
-    # Time to type = words / typing_wpm
-    # Time to speak = words / speaking_wpm
-    # Time saved = time_to_type - time_to_speak
-    daily_time_saved = {}
-    for date, words in daily_words.items():
-        time_to_type = words / typing_wpm
-        time_to_speak = words / speaking_wpm
-        time_saved = time_to_type - time_to_speak
-        daily_time_saved[date] = time_saved
-
-    total_words = sum(daily_words.values())
-    total_time_saved = sum(daily_time_saved.values())
+    def calc_stats(values):
+        if not values:
+            return {"mean": 0, "std": 0, "stderr": 0, "n": 0, "values": []}
+        n = len(values)
+        mean = sum(values) / n
+        if n < 2:
+            return {"mean": mean, "std": 0, "stderr": 0, "n": n, "values": values}
+        variance = sum((v - mean) ** 2 for v in values) / (n - 1)
+        std = math.sqrt(variance)
+        stderr = std / math.sqrt(n)
+        return {"mean": mean, "std": std, "stderr": stderr, "n": n, "values": values}
 
     return {
-        'daily_words': dict(daily_words),
-        'daily_time_saved_minutes': daily_time_saved,
-        'total_words': total_words,
-        'total_time_saved_minutes': total_time_saved,
+        "s2c": calc_stats(data["s2c_ratios"]),
+        "t2c": calc_stats(data["t2c_ratios"]),
     }
 
 
-def plot_time_saved(results: dict, output_path: Path = None):
-    """Plot cumulative time saved and daily usage."""
-    if not HAS_MATPLOTLIB:
-        print("\n[WARNING] matplotlib not installed, skipping plot")
-        print("  Install with: uv pip install matplotlib")
-        return
-
-    dates = sorted(results['daily_time_saved_minutes'].keys())
-    daily_saved = [results['daily_time_saved_minutes'][d] for d in dates]
-    daily_words = [results['daily_words'][d] for d in dates]
-
-    # Calculate cumulative time saved
-    cumulative = []
-    total = 0
-    for saved in daily_saved:
-        total += saved
-        cumulative.append(total)
-
-    # Create figure with two subplots
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-    fig.suptitle('Time Saved Using Voice Transcription', fontsize=14, fontweight='bold')
-
-    # Plot 1: Cumulative time saved
-    ax1.fill_between(dates, cumulative, alpha=0.3, color='green')
-    ax1.plot(dates, cumulative, color='green', linewidth=2, marker='o', markersize=4)
-    ax1.set_ylabel('Cumulative Time Saved (minutes)', fontsize=11)
-    ax1.grid(True, alpha=0.3)
-    ax1.set_ylim(bottom=0)
-
-    # Add total hours annotation (top left of plot)
-    total_hours = results['total_time_saved_minutes'] / 60
-    ax1.text(
-        0.02, 0.95,
-        f'Total: {total_hours:.1f} hours',
-        transform=ax1.transAxes,
-        fontsize=12,
-        fontweight='bold',
-        color='green',
-        verticalalignment='top',
-    )
-
-    # Plot 2: Daily usage (words per day)
-    ax2.bar(dates, daily_words, color='steelblue', alpha=0.7, width=0.8)
-    ax2.set_ylabel('Words Transcribed per Day', fontsize=11)
-    ax2.set_xlabel('Date', fontsize=11)
-    ax2.grid(True, alpha=0.3, axis='y')
-
-    # Format x-axis dates
-    ax2.xaxis.set_major_formatter(mdates.DateFormatter('%b %d'))
-    ax2.xaxis.set_major_locator(mdates.AutoDateLocator())
-    plt.xticks(rotation=45, ha='right')
-
-    # Adjust layout to prevent cutoff
-    plt.tight_layout(rect=[0, 0, 1, 0.96])  # Leave room for suptitle
-    fig.subplots_adjust(hspace=0.1)  # Reduce space between subplots
-
-    if output_path:
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
-        print(f"\nPlot saved to: {output_path}")
-    else:
-        plt.show()
-
-
 def main():
-    parser = argparse.ArgumentParser(
-        description='Calculate time saved using voice transcription vs typing',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python scripts/time_saved.py
-  python scripts/time_saved.py --typing-wpm 80 --speaking-wpm 200
-  python scripts/time_saved.py --save-plot time_saved.png
-        """
-    )
-    parser.add_argument(
-        '--typing-wpm',
-        type=float,
-        default=90,
-        help='Your typing speed in words per minute (default: 90)'
-    )
-    parser.add_argument(
-        '--speaking-wpm',
-        type=float,
-        default=240,
-        help='Your speaking speed in words per minute (default: 240)'
-    )
-    parser.add_argument(
-        '--conversations-dir',
-        type=Path,
-        default=Path('conversations'),
-        help='Directory containing transcription logs (default: conversations/)'
-    )
-    parser.add_argument(
-        '--save-plot',
-        type=Path,
-        default=None,
-        help='Save plot to file instead of displaying'
-    )
-    parser.add_argument(
-        '--no-plot',
-        action='store_true',
-        help='Skip plotting, just show summary'
-    )
+    print("Loading data...")
+    ratios = load_ratio_distributions()
 
-    args = parser.parse_args()
+    s2c_stats = ratios["s2c"]
+    t2c_stats = ratios["t2c"]
 
-    if not args.conversations_dir.exists():
-        print(f"Error: Conversations directory not found: {args.conversations_dir}")
-        return 1
+    # Load speech data (just chars and timestamps, not text content)
+    speech_entries = parse_speech_transcripts()
+    total_speech_chars = sum(e['chars'] for e in speech_entries)
 
-    print(f"Analyzing transcription logs in: {args.conversations_dir}")
-    print(f"Assumptions: typing={args.typing_wpm} WPM, speaking={args.speaking_wpm} WPM")
-    print()
+    # Compute CPS
+    typing_entries = parse_typing_log()
+    typing_stats = compute_typing_burst_cps(typing_entries)
+    speech_stats = compute_speech_burst_cps(speech_entries)
+    typing_cps = typing_stats['aggregate_cps']
+    speech_cps = speech_stats['aggregate_cps']
 
-    results = calculate_time_saved(
-        args.conversations_dir,
-        typing_wpm=args.typing_wpm,
-        speaking_wpm=args.speaking_wpm,
-    )
+    # Compute speedups using t2c directly
+    s2c = s2c_stats["mean"]
+    t2c = t2c_stats["mean"]
+    content_speedup = speech_cps / (t2c * typing_cps)
+    time_saved_per_sec = s2c * (content_speedup - 1)
+    actual_speedup = 1 + time_saved_per_sec
 
-    # Print summary
-    total_words = results['total_words']
-    total_minutes = results['total_time_saved_minutes']
-    total_hours = total_minutes / 60
-    num_days = len(results['daily_words'])
+    # Print report
+    print("=" * 60)
+    print("TIME SAVED REPORT")
+    print("=" * 60)
 
-    print("=" * 50)
-    print("SUMMARY")
-    print("=" * 50)
-    print(f"  Days with transcriptions:  {num_days}")
-    print(f"  Total words transcribed:   {total_words:,}")
-    print(f"  Time saved (minutes):      {total_minutes:.1f}")
-    print(f"  Time saved (hours):        {total_hours:.2f}")
-    print()
+    print(f"\n--- MEASURED RATIOS ---")
+    print(f"Speech -> Core (s2c): {s2c_stats['mean']:.3f} +/- {s2c_stats['stderr']:.3f} (n={s2c_stats['n']})")
+    print(f"Typed -> Core (t2c):  {t2c_stats['mean']:.3f} +/- {t2c_stats['stderr']:.3f} (n={t2c_stats['n']})")
 
-    if num_days > 0:
-        avg_words_per_day = total_words / num_days
-        avg_minutes_per_day = total_minutes / num_days
-        print(f"  Avg words/day:             {avg_words_per_day:.0f}")
-        print(f"  Avg time saved/day:        {avg_minutes_per_day:.1f} min")
+    print(f"\n--- CPS ---")
+    print(f"Typing: {typing_cps:.2f} chars/sec")
+    print(f"Speech: {speech_cps:.2f} chars/sec")
 
-    # Time breakdown
-    time_typing = total_words / args.typing_wpm
-    time_speaking = total_words / args.speaking_wpm
-    print()
-    print(f"  Would have taken to type:  {time_typing:.1f} min ({time_typing/60:.2f} hrs)")
-    print(f"  Took to speak:             {time_speaking:.1f} min ({time_speaking/60:.2f} hrs)")
-    print("=" * 50)
+    print(f"\n--- THINKING TIME ---")
+    content_pct = s2c * 100
+    thinking_pct = (1 - s2c) * 100
+    print(f"Content: {content_pct:.0f}% of speaking")
+    print(f"Thinking (filler): {thinking_pct:.0f}% of speaking")
 
-    # Plot
-    if not args.no_plot and num_days > 0:
-        plot_time_saved(results, args.save_plot)
+    print(f"\n--- PER MINUTE OF SPEAKING ---")
+    content_speak = 60 * s2c
+    thinking = 60 * (1 - s2c)
+    content_type = content_speak * content_speedup
+    print(f"Speaking: {content_speak:.1f}s content + {thinking:.1f}s thinking = 60s")
+    print(f"Typing:   {content_type:.1f}s content + {thinking:.1f}s thinking = {content_type + thinking:.1f}s")
+    print(f"Saved:    {time_saved_per_sec * 60:.0f} seconds")
 
-    return 0
+    print(f"\n--- SPEEDUP ---")
+    print(f"Content speedup: {content_speedup:.2f}x")
+    print(f"Actual speedup:  {actual_speedup:.2f}x (including thinking)")
+
+    # Compute cumulative time saved
+    speech_entries_sorted = sorted(speech_entries, key=lambda e: e['timestamp'])
+    timestamps = []
+    cumulative = []
+    total_time_saved = 0
+    for entry in speech_entries_sorted:
+        core_chars = entry['chars'] * s2c
+        time_to_type = core_chars / t2c / typing_cps
+        time_to_speak = core_chars / speech_cps
+        total_time_saved += time_to_type - time_to_speak
+        timestamps.append(entry['timestamp'])
+        cumulative.append(total_time_saved / 60)
+    total_min = total_time_saved / 60
+
+    print(f"\n--- TOTAL ---")
+    print(f"Speech chars: {total_speech_chars:,}")
+    print(f"Time saved: {total_min:.0f} minutes ({total_min/60:.1f} hours)")
+
+    # Plot - 4 subplots: s2c hist, t2c hist, bubble plot, cumulative
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+    # 1. s2c distribution (top-left)
+    ax1 = axes[0, 0]
+    ax1.hist(s2c_stats['values'], bins=20, edgecolor='black', alpha=0.7)
+    ax1.axvline(s2c_stats['mean'], color='red', linestyle='--', label=f"mean={s2c_stats['mean']:.3f}")
+    ax1.set_xlabel('Speech -> Core ratio')
+    ax1.set_ylabel('Count')
+    ax1.set_title(f"s2c Distribution (n={s2c_stats['n']})")
+    ax1.legend()
+
+    # 2. t2c distribution (top-right)
+    ax2 = axes[0, 1]
+    ax2.hist(t2c_stats['values'], bins=20, edgecolor='black', alpha=0.7)
+    ax2.axvline(t2c_stats['mean'], color='red', linestyle='--', label=f"mean={t2c_stats['mean']:.3f}")
+    ax2.set_xlabel('Typed -> Core ratio')
+    ax2.set_ylabel('Count')
+    ax2.set_title(f"t2c Distribution (n={t2c_stats['n']})")
+    ax2.legend()
+
+    # 3. Bubble plot: s2c vs t2c with speedup as color, density as size (bottom-left)
+    ax3 = axes[1, 0]
+    s2c_vals = np.array(s2c_stats['values'])
+    t2c_vals = np.array(t2c_stats['values'])
+
+    from scipy.stats import gaussian_kde
+
+    s2c_range = np.linspace(s2c_vals.min(), s2c_vals.max(), 15)
+    t2c_range = np.linspace(t2c_vals.min(), t2c_vals.max(), 15)
+    S2C_grid, T2C_grid = np.meshgrid(s2c_range, t2c_range)
+    s2c_flat = S2C_grid.flatten()
+    t2c_flat = T2C_grid.flatten()
+
+    speedup_flat = 1 + s2c_flat * (speech_cps / (t2c_flat * typing_cps) - 1)
+
+    s2c_kde = gaussian_kde(s2c_vals)
+    t2c_kde = gaussian_kde(t2c_vals)
+    density_flat = s2c_kde(s2c_flat) * t2c_kde(t2c_flat)
+    size_flat = (density_flat / density_flat.max()) * 300 + 10
+
+    scatter = ax3.scatter(s2c_flat, t2c_flat, s=size_flat, c=speedup_flat,
+                          cmap='hot_r', alpha=0.7, edgecolors='black', linewidths=0.3)
+    plt.colorbar(scatter, ax=ax3, label='Actual Speedup')
+
+    ax3.axhline(t2c, color='black', linestyle=':', alpha=0.7, linewidth=1)
+    ax3.axvline(s2c, color='black', linestyle=':', alpha=0.7, linewidth=1)
+    ax3.scatter([s2c], [t2c], color='black', s=150, marker='x', linewidths=2, zorder=10,
+                label=f'Mean ({s2c:.3f}, {t2c:.3f}) -> {actual_speedup:.2f}x')
+
+    ax3.annotate(f'{s2c:.3f}', xy=(s2c, t2c_vals.min()), xytext=(s2c, t2c_vals.min() - 0.05),
+                 ha='center', fontsize=8)
+    ax3.annotate(f'{t2c:.3f}', xy=(s2c_vals.min(), t2c), xytext=(s2c_vals.min() - 0.03, t2c),
+                 ha='right', va='center', fontsize=8)
+
+    ax3.set_xlabel('s2c (Speech -> Core)')
+    ax3.set_ylabel('t2c (Typed -> Core)')
+    ax3.set_title('Speedup (color) & Density (size)')
+    ax3.legend(loc='upper right', fontsize=8)
+
+    # 4. Cumulative time saved (bottom-right)
+    ax4 = axes[1, 1]
+    ax4.plot(timestamps, cumulative, 'b-', linewidth=2)
+    ax4.fill_between(timestamps, cumulative, alpha=0.3)
+    ax4.set_xlabel('Date')
+    ax4.set_ylabel('Cumulative Time Saved (minutes)')
+    ax4.set_title(f'Total: {total_min:.0f} min ({total_min/60:.1f} hours)')
+    ax4.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+    ax4.xaxis.set_major_locator(mdates.DayLocator(interval=5))
+    ax4.grid(True, alpha=0.3)
+    plt.setp(ax4.xaxis.get_majorticklabels(), rotation=45)
+
+    plt.tight_layout()
+
+    out_path = Path(__file__).parent / 'time_saved.png'
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+    print(f"\nPlot saved to: {out_path}")
 
 
-if __name__ == '__main__':
-    exit(main())
+if __name__ == "__main__":
+    main()
