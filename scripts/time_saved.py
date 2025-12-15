@@ -24,6 +24,9 @@ TYPING_LOG = CONVERSATIONS_DIR / "typing_log.txt"
 MIN_BURST_SECONDS = 0.5
 MAX_GAP_SECONDS = 2.0
 
+# Typing data before Dvorak fix (2025-12-10 18:18) is corrupted
+TYPING_MIN_DATE = datetime(2025, 12, 10, 18, 18)
+
 
 def parse_typing_log() -> list[dict]:
     """Parse typing log into entries with start/end times and char count."""
@@ -63,8 +66,11 @@ def parse_speech_transcripts() -> list[dict]:
     return entries
 
 
-def compute_typing_burst_cps(entries: list[dict]) -> dict:
+def compute_typing_burst_cps(entries: list[dict], min_date: datetime = None) -> dict:
     """Compute typing burst CPS from entries with start/end times."""
+    if min_date:
+        entries = [e for e in entries if e['start'] >= min_date]
+
     cps_values = []
     total_chars = 0
     total_time = 0
@@ -159,7 +165,7 @@ def main():
 
     # Compute CPS
     typing_entries = parse_typing_log()
-    typing_stats = compute_typing_burst_cps(typing_entries)
+    typing_stats = compute_typing_burst_cps(typing_entries, min_date=TYPING_MIN_DATE)
     speech_stats = compute_speech_burst_cps(speech_entries)
     typing_cps = typing_stats['aggregate_cps']
     speech_cps = speech_stats['aggregate_cps']
@@ -220,7 +226,7 @@ def main():
     print(f"Speech chars: {total_speech_chars:,}")
     print(f"Time saved: {total_min:.0f} minutes ({total_min/60:.1f} hours)")
 
-    # Plot - 4 subplots: s2c hist, t2c hist, bubble plot, cumulative
+    # Plot - 4 subplots: s2c hist, t2c hist, bubble plot, cumulative with CI
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
     # 1. s2c distribution (top-left)
@@ -278,16 +284,44 @@ def main():
     ax3.set_title('Speedup (color) & Density (size)')
     ax3.legend(loc='upper right', fontsize=8)
 
-    # 4. Cumulative time saved (bottom-right)
+    # 4. Cumulative time saved with 95% confidence interval (bottom-right)
+    # Confidence bounds from uncertainty in s2c and t2c
+    # Optimistic: high s2c, low t2c (more compression = more savings)
+    # Pessimistic: low s2c, high t2c (less compression = less savings)
+    z = 1.96  # 95% CI
+    s2c_lo = s2c_stats['mean'] - z * s2c_stats['stderr']
+    s2c_hi = s2c_stats['mean'] + z * s2c_stats['stderr']
+    t2c_lo = t2c_stats['mean'] - z * t2c_stats['stderr']
+    t2c_hi = t2c_stats['mean'] + z * t2c_stats['stderr']
+
+    # Compute cumulative bounds
+    cumulative_lo, cumulative_hi = [], []
+    total_lo, total_hi = 0, 0
+    for entry in speech_entries_sorted:
+        # Pessimistic: low s2c, high t2c
+        core_lo = entry['chars'] * s2c_lo
+        time_to_type_lo = core_lo / t2c_hi / typing_cps
+        time_to_speak_lo = core_lo / speech_cps
+        total_lo += time_to_type_lo - time_to_speak_lo
+        cumulative_lo.append(total_lo / 60)
+
+        # Optimistic: high s2c, low t2c
+        core_hi = entry['chars'] * s2c_hi
+        time_to_type_hi = core_hi / t2c_lo / typing_cps
+        time_to_speak_hi = core_hi / speech_cps
+        total_hi += time_to_type_hi - time_to_speak_hi
+        cumulative_hi.append(total_hi / 60)
+
     ax4 = axes[1, 1]
-    ax4.plot(timestamps, cumulative, 'b-', linewidth=2)
-    ax4.fill_between(timestamps, cumulative, alpha=0.3)
+    ax4.fill_between(timestamps, cumulative_lo, cumulative_hi, alpha=0.3, color='blue', label='95% CI')
+    ax4.plot(timestamps, cumulative, 'b-', linewidth=2, label='Point estimate')
     ax4.set_xlabel('Date')
     ax4.set_ylabel('Cumulative Time Saved (minutes)')
     ax4.set_title(f'Total: {total_min:.0f} min ({total_min/60:.1f} hours)')
     ax4.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
     ax4.xaxis.set_major_locator(mdates.DayLocator(interval=5))
     ax4.grid(True, alpha=0.3)
+    ax4.legend(loc='upper left')
     plt.setp(ax4.xaxis.get_majorticklabels(), rotation=45)
 
     plt.tight_layout()

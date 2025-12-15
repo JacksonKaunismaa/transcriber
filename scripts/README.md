@@ -24,6 +24,42 @@ Toggle transcription on/off with desktop notifications.
 
 See the main README for instructions on binding this to a hotkey (e.g., Ctrl+F6) in various desktop environments.
 
+### `install_widget.sh`
+
+Install the TranscriberStatus widget into a Quickshell bar.
+
+**Usage:**
+```bash
+./scripts/install_widget.sh
+```
+
+**What it does:**
+- Symlinks `bar/TranscriberStatus.qml` into your Quickshell ii bar config
+- Adds the widget import to `BarContent.qml` if not present
+- Shows transcriber status in your bar (gray=off, green=running, orange=mic muted)
+
+**Requirements:**
+- Quickshell with the ii config installed at `~/.config/quickshell/ii/`
+
+### `time_saved.py`
+
+Generate a report showing time saved by voice transcription vs manual typing.
+
+**Usage:**
+```bash
+uv run scripts/time_saved.py
+```
+
+**What it does:**
+- Analyzes `conversations/typing_log.txt` to measure actual typing time
+- Uses pre-computed ratio distributions from `ratio_distributions.json`
+- Estimates how long manual typing would have taken
+- Generates a plot showing cumulative time saved over time
+
+**Output:**
+- Prints summary statistics to terminal
+- Saves plot to `scripts/time_saved.png`
+
 ## Adding New Scripts
 
 When adding utility scripts:

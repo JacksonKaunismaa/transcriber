@@ -17,11 +17,6 @@ from transcriber.session import TranscriptionSession
 # Load environment variables
 load_dotenv()
 
-# Also check for .secrets file
-secrets_path = Path(__file__).parent.parent / ".secrets"
-if secrets_path.exists():
-    load_dotenv(secrets_path)
-
 
 def main():
     """Main entry point."""
@@ -84,6 +79,11 @@ Examples:
         action="store_true",
         help="Disable all audio processing (noise suppression and gain)"
     )
+    parser.add_argument(
+        "--no-log",
+        action="store_true",
+        help="Don't save transcriptions to conversations/ directory"
+    )
     args = parser.parse_args()
 
     print()
@@ -102,7 +102,6 @@ Examples:
         print("\n[ERROR] OPENAI_API_KEY not found!", file=sys.stderr)
         print("[ERROR] Please create a .env file with:", file=sys.stderr)
         print("[ERROR]   OPENAI_API_KEY=your_api_key_here", file=sys.stderr)
-        print("[ERROR] Or create a .secrets file with the same format.", file=sys.stderr)
         sys.exit(1)
 
     noise_suppression = 0 if args.no_audio_processing else args.noise_suppression
@@ -116,6 +115,7 @@ Examples:
         allow_fillers=args.allow_fillers,
         noise_suppression=noise_suppression,
         auto_gain=gain,
+        no_log=args.no_log,
     )
 
     try:

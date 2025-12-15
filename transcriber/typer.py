@@ -185,13 +185,10 @@ class KeyboardTyper:
         Fix wtype keycode 22 bug where punctuation at position 14 triggers BackSpace.
 
         wtype assigns keycodes starting at 9. If a punctuation char is the 14th
-        unique character (keycode 9+13=22), XWayland interprets it as BackSpace.
-
-        Also, wtype in XWayland ignores text that starts with punctuation.
+        unique character (keycode 9+13=22), it can be interpreted as BackSpace.
 
         Fix: split text so unsafe punct never lands at position 14. Split point is
-        chosen so the new chunk starts with an alphanumeric (required by XWayland).
-        We find the last alphanumeric BEFORE where the unsafe punct would occur.
+        chosen so the new chunk starts with an alphanumeric.
         """
         UNSAFE_AT_22 = set(' !"#$\'()*+,-./:;=>?@[\\]^_')
 

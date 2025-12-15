@@ -36,9 +36,11 @@ class TranscriptionSession:
     def __init__(self, api_key: str, model: str = "whisper-1",
                  allow_bye_thank_you: bool = False, allow_non_ascii: bool = False,
                  allow_fillers: bool = False,
-                 noise_suppression: int = 0, auto_gain: float = 1.0):
+                 noise_suppression: int = 0, auto_gain: float = 1.0,
+                 no_log: bool = False):
         self.api_key = api_key
         self.model = model
+        self.no_log = no_log
         self.ws: Optional[websocket.WebSocketApp] = None
         self.audio = pyaudio.PyAudio()
         self.stream = None
@@ -59,22 +61,27 @@ class TranscriptionSession:
             print(f"[WARNING] Keyboard typing not available!")
             print(instructions)
 
-        # Set up logging
-        self.conversations_dir = Path("conversations")
-        self.conversations_dir.mkdir(exist_ok=True)
-
+        # Set up logging (skip if --no-log)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.log_file = self.conversations_dir / f"transcription_{timestamp}.txt"
-        self.debug_log_file = self.conversations_dir / f"debug_events_{timestamp}.jsonl"
+        if no_log:
+            self.conversations_dir = None
+            self.log_file = None
+            self.debug_log_file = None
+        else:
+            self.conversations_dir = Path("conversations")
+            self.conversations_dir.mkdir(exist_ok=True)
+            self.log_file = self.conversations_dir / f"transcription_{timestamp}.txt"
+            self.debug_log_file = self.conversations_dir / f"debug_events_{timestamp}.jsonl"
 
         self.logger = logging.getLogger(f"transcriber.{timestamp}")
         self.logger.setLevel(logging.DEBUG)
-        file_handler = logging.FileHandler(self.debug_log_file, encoding="utf-8")
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(logging.Formatter(
-            '{"timestamp": "%(asctime)s", "level": "%(levelname)s", "message": %(message)s}'
-        ))
-        self.logger.addHandler(file_handler)
+        if not no_log:
+            file_handler = logging.FileHandler(self.debug_log_file, encoding="utf-8")
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.setFormatter(logging.Formatter(
+                '{"timestamp": "%(asctime)s", "level": "%(levelname)s", "message": %(message)s}'
+            ))
+            self.logger.addHandler(file_handler)
 
         # Buffer for partial transcripts (display only)
         self.transcript_buffer = ""
@@ -355,8 +362,11 @@ class TranscriptionSession:
 
         # Stop periodic metrics logging and write final summary
         self.metrics.stop()
-        metrics_file = self.metrics.write_summary(self.conversations_dir)
-        self.logger.info(f'"Session ended. Transcription: {self.log_file}, Metrics: {metrics_file}"')
+        if self.conversations_dir is not None:
+            metrics_file = self.metrics.write_summary(self.conversations_dir)
+            self.logger.info(f'"Session ended. Transcription: {self.log_file}, Metrics: {metrics_file}"')
+        else:
+            self.logger.info('"Session ended (no-log mode, files not saved)"')
 
     def run(self):
         """Start the transcription session with automatic reconnection."""

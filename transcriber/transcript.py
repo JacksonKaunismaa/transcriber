@@ -168,12 +168,13 @@ class TranscriptManager:
         prefix = "[PARTIAL] " if partial else "[FINAL]   "
         print(f"{prefix}{text}", flush=True)
 
-        # Log to file (only final transcripts)
+        # Log to file (only final transcripts, skip if no_log mode)
         if not partial:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            with open(self.log_file, "a", encoding="utf-8") as f:
-                f.write(f"[{timestamp}] {text}\n")
-                f.flush()
+            if self.log_file is not None:
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                with open(self.log_file, "a", encoding="utf-8") as f:
+                    f.write(f"[{timestamp}] {text}\n")
+                    f.flush()
 
             self.current_transcript.append(text)
 
