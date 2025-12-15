@@ -7,24 +7,117 @@ Uses pre-computed ratio distributions (no personal text).
 
 import json
 import math
-import sys
+import re
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-
-# Add tools/time_analysis to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "tools" / "time_analysis"))
-
-from compute_cps import (
-    parse_speech_transcripts,
-    parse_typing_log,
-    compute_typing_burst_cps,
-    compute_speech_burst_cps,
-)
+from scipy.stats import gaussian_kde
 
 RATIO_FILE = Path(__file__).parent / "ratio_distributions.json"
+CONVERSATIONS_DIR = Path(__file__).parent.parent / "conversations"
+TYPING_LOG = CONVERSATIONS_DIR / "typing_log.txt"
+
+# CPS computation parameters
+MIN_BURST_SECONDS = 0.5
+MAX_GAP_SECONDS = 2.0
+
+
+def parse_typing_log() -> list[dict]:
+    """Parse typing log into entries with start/end times and char count."""
+    entries = []
+    pattern = r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?) -> (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?)\] (.+)'
+
+    if not TYPING_LOG.exists():
+        return entries
+
+    for line in TYPING_LOG.read_text().split('\n'):
+        match = re.match(pattern, line)
+        if match:
+            start_str, end_str, text = match.groups()
+            fmt = "%Y-%m-%d %H:%M:%S.%f" if '.' in start_str else "%Y-%m-%d %H:%M:%S"
+            start = datetime.strptime(start_str, fmt)
+            fmt = "%Y-%m-%d %H:%M:%S.%f" if '.' in end_str else "%Y-%m-%d %H:%M:%S"
+            end = datetime.strptime(end_str, fmt)
+            entries.append({'start': start, 'end': end, 'text': text, 'chars': len(text)})
+
+    return entries
+
+
+def parse_speech_transcripts() -> list[dict]:
+    """Parse speech transcripts into entries with timestamps and char count."""
+    entries = []
+    pattern = r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] (.+)'
+
+    for filepath in sorted(CONVERSATIONS_DIR.glob("transcription_*.txt")):
+        for line in filepath.read_text().split('\n'):
+            match = re.match(pattern, line)
+            if match:
+                ts_str, text = match.groups()
+                ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                entries.append({'timestamp': ts, 'text': text, 'chars': len(text)})
+
+    entries.sort(key=lambda e: e['timestamp'])
+    return entries
+
+
+def compute_typing_burst_cps(entries: list[dict]) -> dict:
+    """Compute typing burst CPS from entries with start/end times."""
+    cps_values = []
+    total_chars = 0
+    total_time = 0
+
+    for entry in entries:
+        duration = (entry['end'] - entry['start']).total_seconds()
+        if duration < MIN_BURST_SECONDS:
+            continue
+        chars = entry['chars']
+        cps = chars / duration
+        if cps > 20:  # Filter unrealistic CPS
+            continue
+        cps_values.append(cps)
+        total_chars += chars
+        total_time += duration
+
+    if not cps_values:
+        return {'aggregate_cps': 0, 'n': 0}
+
+    return {
+        'aggregate_cps': total_chars / total_time if total_time > 0 else 0,
+        'n': len(cps_values),
+    }
+
+
+def compute_speech_burst_cps(entries: list[dict]) -> dict:
+    """Compute speech burst CPS using gaps between consecutive entries."""
+    if len(entries) < 2:
+        return {'aggregate_cps': 0, 'n': 0}
+
+    cps_values = []
+    total_chars = 0
+    total_time = 0
+
+    for i in range(len(entries) - 1):
+        gap = (entries[i + 1]['timestamp'] - entries[i]['timestamp']).total_seconds()
+        if gap > MAX_GAP_SECONDS or gap < 0.1:
+            continue
+        chars = entries[i]['chars']
+        cps = chars / gap
+        if cps > 30:  # Filter unrealistic CPS
+            continue
+        cps_values.append(cps)
+        total_chars += chars
+        total_time += gap
+
+    if not cps_values:
+        return {'aggregate_cps': 0, 'n': 0}
+
+    return {
+        'aggregate_cps': total_chars / total_time if total_time > 0 else 0,
+        'n': len(cps_values),
+    }
 
 
 def load_ratio_distributions() -> dict:
@@ -152,8 +245,6 @@ def main():
     ax3 = axes[1, 0]
     s2c_vals = np.array(s2c_stats['values'])
     t2c_vals = np.array(t2c_stats['values'])
-
-    from scipy.stats import gaussian_kde
 
     s2c_range = np.linspace(s2c_vals.min(), s2c_vals.max(), 15)
     t2c_range = np.linspace(t2c_vals.min(), t2c_vals.max(), 15)

@@ -348,10 +348,6 @@ transcriber/
 ├── scripts/             # Utility scripts
 │   ├── toggle_transcribe.sh  # Toggle transcription on/off
 │   └── install_widget.sh     # Install Quickshell widget
-├── tools/               # Diagnostic and testing tools
-│   ├── test_audio_quality.py  # Test microphone audio quality
-│   ├── test_typing.py   # Test keyboard typing functionality
-│   └── analyze_ordering.py    # Analyze transcription ordering
 └── transcriber/         # Main package
     ├── __init__.py
     ├── main.py          # Main transcription logic
@@ -365,23 +361,6 @@ transcriber/
 - `websocket-client` - WebSocket connection to OpenAI
 - `python-dotenv` - Environment variable management
 - `pynput` - Keyboard automation for typing
-
-## Diagnostic Tools
-
-The `tools/` directory contains utilities for testing and debugging:
-
-```bash
-# Test microphone audio quality
-uv run python tools/test_audio_quality.py
-
-# Test keyboard typing functionality
-uv run python tools/test_typing.py
-
-# Analyze transcription ordering in debug logs
-uv run python tools/analyze_ordering.py
-```
-
-See `tools/README.md` for more information.
 
 ## Tips
 
