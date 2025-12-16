@@ -28,6 +28,12 @@ hallucinations:
     flags: ignorecase
   - pattern: "Thanks for tuning in\\.?\\s*(?:We'll talk to you again soon\\.?)?\\s*"
     flags: ignorecase
+  - pattern: 'If you don''t have a phone.*see you next time\.?\s*'
+    flags: ignorecase
+
+  # Website hallucinations
+  - pattern: 'www\.larryweaver\.com\.?\s*'
+    flags: ignorecase
 
   # Repeated characters (keyboard noise, etc.)
   - pattern: '\b[Aa]+[Hh]+\b\.?\s*'
