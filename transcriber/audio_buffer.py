@@ -70,8 +70,11 @@ class AudioBuffer:
         self.timeout_check_thread.start()
 
     def stop(self):
-        """Stop the timeout checking thread."""
+        """Stop the timeout checking thread and wait for it to finish."""
         self.running = False
+        if self.timeout_check_thread and self.timeout_check_thread.is_alive():
+            self.timeout_check_thread.join(timeout=2.0)
+        self.timeout_check_thread = None
 
     def add_audio_chunk(self, chunk: bytes):
         """Add an audio chunk to the buffer with current timestamp."""
