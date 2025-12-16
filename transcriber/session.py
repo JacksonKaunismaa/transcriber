@@ -331,6 +331,21 @@ class TranscriptionSession:
         self.audio_buffer.reset()
         # Re-link shared dict after reset (reset creates new dict)
         self.transcript_manager.set_item_speech_times(self.audio_buffer.item_speech_times)
+
+        # Close audio stream to prevent leaking recording instances on reconnect
+        if self.stream:
+            try:
+                self.stream.stop_stream()
+                self.stream.close()
+            except Exception:
+                pass
+            self.stream = None
+
+        # Wait for audio thread to finish before starting a new one
+        if self.audio_thread and self.audio_thread.is_alive():
+            self.audio_thread.join(timeout=2.0)
+        self.audio_thread = None
+
         self.ws = None
         self.audio_processor = None
         self.logger.info('"Session state reset for reconnection"')
