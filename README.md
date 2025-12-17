@@ -67,10 +67,13 @@ sudo pacman -S portaudio
 
 **Keyboard typing tool:**
 
-For **Wayland** (install wtype):
+For **Wayland** (install wtype and wl-clipboard):
 ```bash
 # Arch
-sudo pacman -S wtype
+sudo pacman -S wtype wl-clipboard
+
+# Ubuntu/Debian
+sudo apt-get install wtype wl-clipboard
 
 # From source (other distros)
 # See: https://github.com/atx/wtype
@@ -85,7 +88,7 @@ sudo apt-get install xdotool
 sudo pacman -S xdotool
 ```
 
-The tool automatically detects your display server and uses wtype (Wayland) or xdotool (X11).
+The tool automatically detects your display server. On Wayland, it uses Shift+Insert paste (via wl-copy and wtype) which is faster and more reliable than keystroke simulation. On X11, it uses xdotool.
 
 ## Usage
 
@@ -227,8 +230,9 @@ Restart Quickshell after installing: `qs reload`
 
 ### Keyboard Automation
 
-The tool detects your display server and uses:
-- **wtype** on Wayland
+The tool detects your display server and uses the best available method:
+- **Shift+Insert paste** on Wayland (preferred) - Uses wl-copy to set the PRIMARY selection, then wtype to send Shift+Insert. This is ~70x faster than keystroke simulation and avoids crashes in terminal TUIs like Claude Code.
+- **wtype** on Wayland (fallback) - Direct keystroke simulation if wl-copy is unavailable.
 - **xdotool** on X11
 
 If typing fails, transcriptions are still saved to the log files.
@@ -295,7 +299,7 @@ uv run python -c "import pyaudio; pa = pyaudio.PyAudio(); [print(f'{i}: {pa.get_
 ### Keyboard typing not working
 
 **If typing isn't working:**
-1. For **Wayland**: Install `wtype`
+1. For **Wayland**: Install `wtype` and `wl-clipboard`
 2. For **X11**: Install `xdotool`
 3. Make sure the target window has focus
 4. Transcriptions are still saved to `conversations/` even if typing fails

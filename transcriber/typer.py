@@ -2,10 +2,13 @@
 Robust keyboard typing automation with multiple fallback methods.
 
 Supports:
-- Wayland (ydotool, wtype)
+- Wayland (Shift+Insert paste via wl-copy, wtype, ydotool)
 - X11 (xdotool)
 - Python fallbacks (pynput)
 - Clipboard fallback
+
+The preferred method on Wayland is Shift+Insert paste, which is ~70x faster
+than wtype keystroke simulation and doesn't trigger Claude Code crashes.
 """
 
 import subprocess
@@ -30,7 +33,13 @@ class KeyboardTyper:
         """Detect and select the best available typing method."""
 
         if self.display_server == "wayland":
-            # Wayland-specific tools (wtype first as it's more reliable)
+            # Wayland-specific tools
+            # Shift+Insert paste is preferred: ~70x faster, no crash issues
+            if self._test_shift_insert():
+                self.method = self._type_with_shift_insert
+                self.method_name = "Shift+Insert paste (Wayland)"
+                return
+
             if self._test_wtype():
                 self.method = self._type_with_wtype
                 self.method_name = "wtype (Wayland)"
@@ -49,7 +58,13 @@ class KeyboardTyper:
                 return
 
         else:
-            # Unknown display server, try all tools (prefer wtype due to reliability)
+            # Unknown display server, try all tools
+            # Shift+Insert paste is preferred: ~70x faster, no crash issues
+            if self._test_shift_insert():
+                self.method = self._type_with_shift_insert
+                self.method_name = "Shift+Insert paste (Wayland)"
+                return
+
             if self._test_wtype():
                 self.method = self._type_with_wtype
                 self.method_name = "wtype (Wayland)"
@@ -80,6 +95,14 @@ class KeyboardTyper:
         # Nothing works
         self.method = None
         self.method_name = "none (no typing available)"
+
+    def _test_shift_insert(self) -> bool:
+        """Test if Shift+Insert paste method is available (requires wl-copy and wtype)."""
+        if not shutil.which("wl-copy"):
+            return False
+        if not shutil.which("wtype"):
+            return False
+        return True
 
     def _test_ydotool(self) -> bool:
         """Test if ydotool is available and working."""
@@ -147,6 +170,45 @@ class KeyboardTyper:
             return shutil.which("wl-copy") is not None
         else:
             return shutil.which("xclip") is not None
+
+    def _type_with_shift_insert(self, text: str) -> bool:
+        """
+        Type text using Shift+Insert paste via PRIMARY selection.
+
+        This method is ~70x faster than wtype keystroke simulation and doesn't
+        trigger crashes in Claude Code's TUI. Text is chunked at 801 chars to
+        avoid Claude Code's "[Pasted text]" display threshold.
+        """
+        # Chunk size: 801 chars shows actual text, 802+ shows "[Pasted text]"
+        CHUNK_SIZE = 801
+
+        text_with_space = text + " "
+
+        try:
+            # Split into chunks
+            chunks = [
+                text_with_space[i : i + CHUNK_SIZE]
+                for i in range(0, len(text_with_space), CHUNK_SIZE)
+            ]
+
+            for chunk in chunks:
+                # Copy to PRIMARY selection
+                subprocess.run(
+                    ["wl-copy", "--primary"],
+                    input=chunk.encode(),
+                    check=True,
+                    timeout=2,
+                )
+                # Paste via Shift+Insert
+                subprocess.run(
+                    ["wtype", "-M", "shift", "-k", "Insert", "-m", "shift"],
+                    check=True,
+                    capture_output=True,
+                    timeout=5,
+                )
+            return True
+        except Exception:
+            raise
 
     def _type_with_ydotool(self, text: str) -> bool:
         """Type text using ydotool (Wayland)."""
