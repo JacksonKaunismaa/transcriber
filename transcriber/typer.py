@@ -15,6 +15,7 @@ import subprocess
 import shutil
 import os
 import sys
+import json
 from typing import Optional
 
 
@@ -34,7 +35,19 @@ class KeyboardTyper:
 
         if self.display_server == "wayland":
             # Wayland-specific tools
-            # Shift+Insert paste is preferred: ~70x faster, no crash issues
+            # Adaptive is preferred: middle-click for most apps, wtype for Chromium
+            if self._test_adaptive():
+                self.method = self._type_with_adaptive
+                self.method_name = "adaptive (middle-click / wtype for Chromium)"
+                return
+
+            # Middle-click fallback if hyprctl not available
+            if self._test_middle_click():
+                self.method = self._type_with_middle_click
+                self.method_name = "middle-click paste (Wayland)"
+                return
+
+            # Shift+Insert fallback: Chromium ignores PRIMARY selection
             if self._test_shift_insert():
                 self.method = self._type_with_shift_insert
                 self.method_name = "Shift+Insert paste (Wayland)"
@@ -59,7 +72,16 @@ class KeyboardTyper:
 
         else:
             # Unknown display server, try all tools
-            # Shift+Insert paste is preferred: ~70x faster, no crash issues
+            if self._test_adaptive():
+                self.method = self._type_with_adaptive
+                self.method_name = "adaptive (middle-click / wtype for Chromium)"
+                return
+
+            if self._test_middle_click():
+                self.method = self._type_with_middle_click
+                self.method_name = "middle-click paste (Wayland)"
+                return
+
             if self._test_shift_insert():
                 self.method = self._type_with_shift_insert
                 self.method_name = "Shift+Insert paste (Wayland)"
@@ -95,6 +117,49 @@ class KeyboardTyper:
         # Nothing works
         self.method = None
         self.method_name = "none (no typing available)"
+
+    def _test_middle_click(self) -> bool:
+        """Test if middle-click paste method is available (requires wl-copy and wlrctl)."""
+        if not shutil.which("wl-copy"):
+            return False
+        if not shutil.which("wlrctl"):
+            return False
+        return True
+
+    def _test_adaptive(self) -> bool:
+        """Test if adaptive method is available (middle-click + wtype + hyprctl)."""
+        if not shutil.which("wl-copy"):
+            return False
+        if not shutil.which("wlrctl"):
+            return False
+        if not shutil.which("wtype"):
+            return False
+        if not shutil.which("hyprctl"):
+            return False
+        return True
+
+    def _is_chromium_focused(self) -> bool:
+        """Check if the focused window is a Chromium-based app."""
+        try:
+            result = subprocess.run(
+                ["hyprctl", "activewindow", "-j"],
+                capture_output=True,
+                timeout=1,
+            )
+            if result.returncode != 0:
+                return False
+
+            window_info = json.loads(result.stdout)
+            window_class = window_info.get("class", "").lower()
+
+            # Chromium-based apps
+            chromium_classes = [
+                "chromium", "google-chrome", "brave", "brave-browser",
+                "microsoft-edge", "vivaldi", "opera", "electron",
+            ]
+            return any(c in window_class for c in chromium_classes)
+        except Exception:
+            return False
 
     def _test_shift_insert(self) -> bool:
         """Test if Shift+Insert paste method is available (requires wl-copy and wtype)."""
@@ -170,6 +235,58 @@ class KeyboardTyper:
             return shutil.which("wl-copy") is not None
         else:
             return shutil.which("xclip") is not None
+
+    def _type_with_adaptive(self, text: str) -> bool:
+        """
+        Adaptive typing: middle-click for most apps, wtype for Chromium.
+
+        Chromium apps ignore PRIMARY selection for Shift+Insert, and middle-click
+        pastes at mouse position which is unreliable. So we detect Chromium and
+        use wtype (slower but works with keyboard focus).
+        """
+        if self._is_chromium_focused():
+            return self._type_with_wtype(text)
+        else:
+            return self._type_with_middle_click(text)
+
+    def _type_with_middle_click(self, text: str) -> bool:
+        """
+        Type text using middle-click paste via PRIMARY selection.
+
+        This method works in all apps (terminals, Firefox, Chromium) unlike
+        Shift+Insert which Chromium ignores. Text is chunked at 801 chars to
+        avoid Claude Code's "[Pasted text]" display threshold.
+        """
+        # Chunk size: 801 chars shows actual text, 802+ shows "[Pasted text]"
+        CHUNK_SIZE = 801
+
+        text_with_space = text + " "
+
+        try:
+            # Split into chunks
+            chunks = [
+                text_with_space[i : i + CHUNK_SIZE]
+                for i in range(0, len(text_with_space), CHUNK_SIZE)
+            ]
+
+            for chunk in chunks:
+                # Copy to PRIMARY selection (--trim-newline prevents trailing newline)
+                subprocess.run(
+                    ["wl-copy", "--primary", "--trim-newline"],
+                    input=chunk.encode(),
+                    check=True,
+                    timeout=2,
+                )
+                # Paste via middle-click
+                subprocess.run(
+                    ["wlrctl", "pointer", "click", "middle"],
+                    check=True,
+                    capture_output=True,
+                    timeout=5,
+                )
+            return True
+        except Exception:
+            raise
 
     def _type_with_shift_insert(self, text: str) -> bool:
         """
@@ -372,14 +489,15 @@ class KeyboardTyper:
 
             if self.display_server == "wayland":
                 instructions.append("For Wayland, install one of:")
-                instructions.append("  • wtype (recommended): sudo pacman -S wtype")
+                instructions.append("  • wlrctl + wl-clipboard (recommended): yay -S wlrctl && sudo pacman -S wl-clipboard")
+                instructions.append("  • wtype + wl-clipboard: sudo pacman -S wtype wl-clipboard")
                 instructions.append("  • ydotool: sudo pacman -S ydotool  (then: sudo systemctl enable --now ydotool)")
             elif self.display_server == "x11":
                 instructions.append("For X11, install:")
                 instructions.append("  • xdotool: sudo pacman -S xdotool")
             else:
                 instructions.append("Install a typing tool:")
-                instructions.append("  • For Wayland: sudo pacman -S wtype  (recommended)")
+                instructions.append("  • For Wayland: yay -S wlrctl && sudo pacman -S wl-clipboard  (recommended)")
                 instructions.append("  • For X11: sudo pacman -S xdotool")
 
             instructions.append("\nOr install Python fallback:")
