@@ -138,8 +138,8 @@ class KeyboardTyper:
             return False
         return True
 
-    def _is_chromium_focused(self) -> bool:
-        """Check if the focused window is a Chromium-based app."""
+    def _get_focused_window_class(self) -> str:
+        """Get the class of the focused window via hyprctl."""
         try:
             result = subprocess.run(
                 ["hyprctl", "activewindow", "-j"],
@@ -147,19 +147,26 @@ class KeyboardTyper:
                 timeout=1,
             )
             if result.returncode != 0:
-                return False
+                return ""
 
             window_info = json.loads(result.stdout)
-            window_class = window_info.get("class", "").lower()
-
-            # Chromium-based apps
-            chromium_classes = [
-                "chromium", "google-chrome", "brave", "brave-browser",
-                "microsoft-edge", "vivaldi", "opera", "electron",
-            ]
-            return any(c in window_class for c in chromium_classes)
+            return window_info.get("class", "").lower()
         except Exception:
-            return False
+            return ""
+
+    def _is_chromium_focused(self) -> bool:
+        """Check if the focused window is a Chromium-based app."""
+        window_class = self._get_focused_window_class()
+        chromium_classes = [
+            "chromium", "google-chrome", "brave", "brave-browser",
+            "microsoft-edge", "vivaldi", "opera", "electron",
+        ]
+        return any(c in window_class for c in chromium_classes)
+
+    def _is_kitty_focused(self) -> bool:
+        """Check if the focused window is kitty terminal."""
+        window_class = self._get_focused_window_class()
+        return "kitty" in window_class
 
     def _test_shift_insert(self) -> bool:
         """Test if Shift+Insert paste method is available (requires wl-copy and wtype)."""
@@ -238,13 +245,15 @@ class KeyboardTyper:
 
     def _type_with_adaptive(self, text: str) -> bool:
         """
-        Adaptive typing: middle-click for most apps, wtype for Chromium.
+        Adaptive typing based on focused window.
 
-        Chromium apps ignore PRIMARY selection for Shift+Insert, and middle-click
-        pastes at mouse position which is unreliable. So we detect Chromium and
-        use wtype (slower but works with keyboard focus).
+        - Kitty: Shift+Insert (fast, keyboard focus, PRIMARY works)
+        - Chromium: wtype (slower, but keyboard focus works)
+        - Other: middle-click (fast, but pastes at mouse position)
         """
-        if self._is_chromium_focused():
+        if self._is_kitty_focused():
+            return self._type_with_shift_insert(text)
+        elif self._is_chromium_focused():
             return self._type_with_wtype(text)
         else:
             return self._type_with_middle_click(text)
