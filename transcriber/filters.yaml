@@ -35,6 +35,10 @@ hallucinations:
   - pattern: 'www\.larryweaver\.com\.?\s*'
     flags: ignorecase
 
+  # Subtitle watermarks
+  - pattern: 'Altyaz.*M\.?\s*K\.?\s*'
+    flags: ignorecase
+
   # Repeated characters (keyboard noise, etc.)
   - pattern: '\b[Aa]+[Hh]+\b\.?\s*'
     comment: "Ahhh, aaahhhh, etc."

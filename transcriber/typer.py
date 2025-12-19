@@ -35,10 +35,10 @@ class KeyboardTyper:
 
         if self.display_server == "wayland":
             # Wayland-specific tools
-            # Adaptive is preferred: middle-click for most apps, wtype for Chromium
+            # Adaptive is preferred: wtype for most apps, Shift+Insert for kitty
             if self._test_adaptive():
                 self.method = self._type_with_adaptive
-                self.method_name = "adaptive (middle-click / wtype for Chromium)"
+                self.method_name = "adaptive (wtype / Shift+Insert for kitty)"
                 return
 
             # Middle-click fallback if hyprctl not available
@@ -74,7 +74,7 @@ class KeyboardTyper:
             # Unknown display server, try all tools
             if self._test_adaptive():
                 self.method = self._type_with_adaptive
-                self.method_name = "adaptive (middle-click / wtype for Chromium)"
+                self.method_name = "adaptive (wtype / Shift+Insert for kitty)"
                 return
 
             if self._test_middle_click():
@@ -248,15 +248,12 @@ class KeyboardTyper:
         Adaptive typing based on focused window.
 
         - Kitty: Shift+Insert (fast, keyboard focus, PRIMARY works)
-        - Chromium: wtype (slower, but keyboard focus works)
-        - Other: middle-click (fast, but pastes at mouse position)
+        - Everything else: wtype (keyboard focus)
         """
         if self._is_kitty_focused():
             return self._type_with_shift_insert(text)
-        elif self._is_chromium_focused():
-            return self._type_with_wtype(text)
         else:
-            return self._type_with_middle_click(text)
+            return self._type_with_wtype(text)
 
     def _type_with_middle_click(self, text: str) -> bool:
         """
