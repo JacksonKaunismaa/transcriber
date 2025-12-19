@@ -127,10 +127,8 @@ class KeyboardTyper:
         return True
 
     def _test_adaptive(self) -> bool:
-        """Test if adaptive method is available (middle-click + wtype + hyprctl)."""
+        """Test if adaptive method is available (wtype + hyprctl for window detection)."""
         if not shutil.which("wl-copy"):
-            return False
-        if not shutil.which("wlrctl"):
             return False
         if not shutil.which("wtype"):
             return False
@@ -153,15 +151,6 @@ class KeyboardTyper:
             return window_info.get("class", "").lower()
         except Exception:
             return ""
-
-    def _is_chromium_focused(self) -> bool:
-        """Check if the focused window is a Chromium-based app."""
-        window_class = self._get_focused_window_class()
-        chromium_classes = [
-            "chromium", "google-chrome", "brave", "brave-browser",
-            "microsoft-edge", "vivaldi", "opera", "electron",
-        ]
-        return any(c in window_class for c in chromium_classes)
 
     def _is_kitty_focused(self) -> bool:
         """Check if the focused window is kitty terminal."""
