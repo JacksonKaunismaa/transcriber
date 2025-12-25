@@ -3,6 +3,10 @@
 import json
 import shutil
 import subprocess
+from pathlib import Path
+from typing import Optional
+
+import yaml
 
 
 def test_middle_click() -> bool:
@@ -121,7 +125,45 @@ def get_focused_window_class() -> str:
         return ""
 
 
-def is_kitty_focused() -> bool:
-    """Check if the focused window is kitty terminal."""
-    window_class = get_focused_window_class()
-    return "kitty" in window_class
+class TyperRules:
+    """Load and manage typer rules from YAML config with dynamic reload."""
+
+    def __init__(self, config_path: Optional[Path] = None):
+        if config_path is None:
+            config_path = Path(__file__).parent.parent / "typer_rules.yaml"
+        self._config_path = config_path
+        self._mtime: float = 0
+        self._rules: list = []
+        self._default: str = "wtype"
+        self._reload()
+
+    def _reload(self):
+        """Reload rules from config file if modified."""
+        try:
+            if not self._config_path.exists():
+                return
+
+            mtime = self._config_path.stat().st_mtime
+            if mtime == self._mtime:
+                return
+
+            with open(self._config_path) as f:
+                config = yaml.safe_load(f) or {}
+
+            self._rules = config.get("rules", [])
+            self._default = config.get("default", "wtype")
+            self._mtime = mtime
+        except Exception:
+            pass
+
+    def get_method_for_window(self, window_class: str) -> str:
+        """Get the typing method to use for the given window class."""
+        self._reload()
+
+        window_lower = window_class.lower()
+        for rule in self._rules:
+            match = rule.get("match", "").lower()
+            if match and match in window_lower:
+                return rule.get("method", self._default)
+
+        return self._default

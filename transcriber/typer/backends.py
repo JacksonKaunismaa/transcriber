@@ -2,24 +2,32 @@
 
 import subprocess
 import sys
+from typing import TYPE_CHECKING
 
-from .detection import is_kitty_focused
+if TYPE_CHECKING:
+    from .detection import TyperRules
 
 # Chunk size: 801 chars shows actual text, 802+ shows "[Pasted text]" in Claude Code
 CHUNK_SIZE = 801
 
 
-def type_with_adaptive(text: str) -> bool:
+def type_with_adaptive(text: str, rules: "TyperRules", window_class: str) -> bool:
     """
-    Adaptive typing based on focused window.
+    Adaptive typing based on focused window and configured rules.
 
-    - Kitty: Shift+Insert (fast, keyboard focus, PRIMARY works)
-    - Everything else: wtype (keyboard focus)
+    Dispatches to the appropriate backend based on typer_rules.yaml config.
     """
-    if is_kitty_focused():
-        return type_with_shift_insert(text)
-    else:
-        return type_with_wtype(text)
+    method = rules.get_method_for_window(window_class)
+
+    dispatch = {
+        "shift-insert": type_with_shift_insert,
+        "wtype": type_with_wtype,
+        "middle-click": type_with_middle_click,
+        "ydotool": type_with_ydotool,
+    }
+
+    backend = dispatch.get(method, type_with_wtype)
+    return backend(text)
 
 
 def type_with_middle_click(text: str) -> bool:

@@ -1,0 +1,11 @@
+# Window class -> typing method mapping
+# Methods: shift-insert, wtype, middle-click, ydotool
+# Matching: substring (case-insensitive), first match wins
+# File is reloaded automatically when modified
+
+rules:
+  - match: kitty
+    method: shift-insert
+    comment: "Kitty respects PRIMARY + Shift+Insert at keyboard focus"
+
+default: wtype
