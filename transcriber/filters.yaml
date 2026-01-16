@@ -26,6 +26,8 @@ hallucinations:
   # YouTube outro hallucinations
   - pattern: "(?:But )?[Ii]f you(?:'re| are) watching this,? make sure to (?:like|subscribe).*(?:Bye[ -]?bye|next time)\\.?\\s*"
     flags: ignorecase
+  - pattern: 'Thanks for watching!?\s*'
+    flags: ignorecase
   - pattern: "Thanks for tuning in\\.?\\s*(?:We'll talk to you again soon\\.?)?\\s*"
     flags: ignorecase
   - pattern: 'If you don''t have a phone.*see you next time\.?\s*'
@@ -34,10 +36,18 @@ hallucinations:
   # Website hallucinations
   - pattern: 'www\.larryweaver\.com\.?\s*'
     flags: ignorecase
+  - pattern: 'Go to Beadaholique\.com.*beading supply needs.?\s*'
+    flags: ignorecase
+  - pattern: 'For more information,? go to www\.fema\.gov\.?\s*'
+    flags: ignorecase
 
   # Subtitle watermarks
   - pattern: 'Altyaz.*M\.?\s*K\.?\s*'
     flags: ignorecase
+
+  # Foreign language hallucinations
+  - pattern: 'Belki de sadece\.{0,3}\s*'
+    comment: "Turkish 'Maybe just...' hallucination"
 
   # Repeated characters (keyboard noise, etc.)
   - pattern: '\b[Aa]+[Hh]+\b\.?\s*'

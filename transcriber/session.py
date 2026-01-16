@@ -83,6 +83,9 @@ class TranscriptionSession:
             ))
             self.logger.addHandler(file_handler)
 
+        # Pass logger to typer for adaptive typing debug logging
+        self.typer.set_logger(self.logger)
+
         # Buffer for partial transcripts (display only)
         self.transcript_buffer = ""
         self.event_counter = 0
