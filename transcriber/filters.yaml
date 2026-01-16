@@ -3,7 +3,7 @@
 # Filters are applied in order within each category
 
 # Hallucinations from background noise / model artifacts
-# Only applied when allow_bye_thank_you=False
+# Controlled by --allow-bye-thank-you flag (disables entire section)
 hallucinations:
   # Common false positives
   - pattern: '\bBye\.\s*'

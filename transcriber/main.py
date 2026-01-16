@@ -8,7 +8,6 @@ CLI entry point for the transcriber application.
 import os
 import sys
 import argparse
-from pathlib import Path
 from dotenv import load_dotenv
 
 from transcriber.deps import check_system_dependencies
@@ -33,56 +32,59 @@ Examples:
   transcribe                    # Use default whisper-1 model
   transcribe --model gpt-4o-transcribe
   transcribe -m whisper-1
-  transcribe --allow-bye-thank-you    # Allow "Bye." and "Thank you."
+  transcribe --allow-bye-thank-you    # Disable hallucination filtering
   transcribe --allow-non-ascii        # Allow non-ASCII characters
   transcribe --noise-suppression 2    # Enable noise suppression (0-4)
   transcribe --gain 2.0              # Apply 2x volume gain
   transcribe --no-audio-processing   # Disable all audio processing
-"""
+""",
     )
     parser.add_argument(
-        "-m", "--model",
+        "-m",
+        "--model",
         default="whisper-1",
         choices=["whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"],
-        help="Transcription model to use (default: whisper-1)"
+        help="Transcription model to use (default: whisper-1)",
     )
     parser.add_argument(
         "--allow-bye-thank-you",
         action="store_true",
-        help="Don't filter out 'Bye.' and 'Thank you.' (common false positives)"
+        help="Disable hallucination filtering (false positives, YouTube outros, etc.)",
     )
     parser.add_argument(
         "--allow-non-ascii",
         action="store_true",
-        help="Allow non-ASCII characters in transcription"
+        help="Allow non-ASCII characters in transcription",
     )
     parser.add_argument(
         "--allow-fillers",
         action="store_true",
-        help="Don't filter out filler words (um, uh, hmm, etc.)"
+        help="Don't filter out filler words (um, uh, hmm, etc.)",
     )
     parser.add_argument(
-        "--noise-suppression", "-n",
+        "--noise-suppression",
+        "-n",
         type=int,
         default=0,
         choices=[0, 1, 2, 3, 4],
-        help="Noise suppression level (0=off, 1-4=increasing suppression)"
+        help="Noise suppression level (0=off, 1-4=increasing suppression)",
     )
     parser.add_argument(
-        "--gain", "-g",
+        "--gain",
+        "-g",
         type=float,
         default=1.0,
-        help="Audio gain multiplier (e.g., 2.0 = double volume)"
+        help="Audio gain multiplier (e.g., 2.0 = double volume)",
     )
     parser.add_argument(
         "--no-audio-processing",
         action="store_true",
-        help="Disable all audio processing (noise suppression and gain)"
+        help="Disable all audio processing (noise suppression and gain)",
     )
     parser.add_argument(
         "--no-log",
         action="store_true",
-        help="Don't save transcriptions to conversations/ directory"
+        help="Don't save transcriptions to conversations/ directory",
     )
     args = parser.parse_args()
 
@@ -93,7 +95,10 @@ Examples:
     print()
 
     if not check_system_dependencies():
-        print("\n[ERROR] Cannot start transcription due to missing dependencies.", file=sys.stderr)
+        print(
+            "\n[ERROR] Cannot start transcription due to missing dependencies.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     api_key = os.getenv("OPENAI_API_KEY")
@@ -120,7 +125,7 @@ Examples:
 
     try:
         session.run()
-    except Exception as e:
+    except Exception:
         session.logger.exception('"Fatal error"')
         session.cleanup()
         sys.exit(1)

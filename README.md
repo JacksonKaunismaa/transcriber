@@ -15,7 +15,7 @@ This tool is built for people who use AI assistants heavily and want to talk to 
 
 - **Real-time transcription** using OpenAI's GPT-4 Realtime API
 - **Automatic typing** into any active window (works everywhere!)
-- **Smart filtering** removes common false positives ("Bye.", "Thank you.") and non-English characters by default
+- **Smart filtering** removes hallucinations, filler words, and non-ASCII characters by default
 - **Triple redundancy**: Terminal display + file logging + keyboard typing
 - **Conversation archiving** in timestamped files
 - **Graceful error handling** with recovery mechanisms
@@ -123,23 +123,36 @@ uv run transcribe -m gpt-4o-mini-transcribe
 By default, the tool filters out common false positives to improve transcription quality:
 
 **Filtered by default:**
-- `"Bye."` - Often appears as a false positive
-- `"Thank you."` - Often appears as a false positive
-- Non-English (non-ASCII) characters
+- **Hallucinations** - "Bye.", "Thank you.", YouTube outro phrases, website URLs, subtitle watermarks
+- **Filler words** - um, uh, hmm, mhm, etc.
+- **Non-ASCII characters** - emojis, accented characters, CJK, etc.
 
 **Disable filtering when needed:**
 ```bash
-# Allow "Bye." and "Thank you." in transcriptions
+# Disable hallucination filtering
 uv run transcribe --allow-bye-thank-you
 
-# Allow non-English characters
-uv run transcribe --allow-non-english
+# Allow filler words (um, uh, hmm)
+uv run transcribe --allow-fillers
 
-# Disable all filtering
-uv run transcribe --allow-bye-thank-you --allow-non-english
+# Allow non-ASCII characters
+uv run transcribe --allow-non-ascii
 
 # Don't save transcriptions to conversations/ (privacy mode)
 uv run transcribe --no-log
+```
+
+### Audio Processing
+
+```bash
+# Enable noise suppression (0=off, 1-4=increasing levels)
+uv run transcribe --noise-suppression 2
+
+# Apply audio gain (e.g., 2.0 = double volume)
+uv run transcribe --gain 2.0
+
+# Disable all audio processing
+uv run transcribe --no-audio-processing
 ```
 
 To see all options:

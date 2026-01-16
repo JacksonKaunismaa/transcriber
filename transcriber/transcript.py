@@ -2,7 +2,7 @@
 Transcript processing, filtering, ordering, and output.
 
 Handles:
-- Text filtering (false positives, non-English characters)
+- Text filtering (false positives, non-ASCII characters)
 - Ordered output of transcripts (ensuring speech order is preserved)
 - Fuzzy duplicate detection (prevents double-typing from race conditions)
 - Logging to file and terminal
@@ -66,11 +66,17 @@ def _compile_filters(filter_list: List[dict]) -> List[Tuple[re.Pattern, str]]:
 class TranscriptManager:
     """Manages transcript filtering, ordering, deduplication, and output."""
 
-    def __init__(self, typer: KeyboardTyper, log_file: Path, logger: logging.Logger,
-                 allow_bye_thank_you: bool = False, allow_non_ascii: bool = False,
-                 allow_fillers: bool = False,
-                 metrics: Optional["TranscriptionMetrics"] = None,
-                 filters_config: Optional[Path] = None):
+    def __init__(
+        self,
+        typer: KeyboardTyper,
+        log_file: Path,
+        logger: logging.Logger,
+        allow_bye_thank_you: bool = False,
+        allow_non_ascii: bool = False,
+        allow_fillers: bool = False,
+        metrics: Optional["TranscriptionMetrics"] = None,
+        filters_config: Optional[Path] = None,
+    ):
         self.typer = typer
         self.log_file = log_file
         self.logger = logger
@@ -90,7 +96,9 @@ class TranscriptManager:
         self.item_order: List[str] = []
         self.completed_transcripts: Dict[str, str] = {}
         self.next_output_index = 0
-        self.recent_transcripts: List[tuple] = []  # (timestamp, text) for duplicate detection
+        self.recent_transcripts: List[
+            tuple
+        ] = []  # (timestamp, text) for duplicate detection
         self.output_lock = threading.Lock()
 
         # Track completed items (shared with audio buffer for race condition prevention)
@@ -114,7 +122,9 @@ class TranscriptManager:
                 return
 
             filters = _load_filters(self._filters_config)
-            self._hallucination_filters = _compile_filters(filters.get("hallucinations", []))
+            self._hallucination_filters = _compile_filters(
+                filters.get("hallucinations", [])
+            )
             self._filler_filters = _compile_filters(filters.get("fillers", []))
             self._non_ascii_filters = _compile_filters(filters.get("non_ascii", []))
 
@@ -131,7 +141,7 @@ class TranscriptManager:
         By default:
         - Filters out hallucinations (common false positives from background noise)
         - Filters out filler words (um, uh, hmm, etc.)
-        - Filters out non-English characters
+        - Filters out non-ASCII characters
         """
         if not text:
             return text
@@ -142,20 +152,20 @@ class TranscriptManager:
         # Apply hallucination filters
         if not self.allow_bye_thank_you:
             for pattern, _ in self._hallucination_filters:
-                text = pattern.sub('', text)
+                text = pattern.sub("", text)
 
         # Apply filler filters
         if not self.allow_fillers:
             for pattern, _ in self._filler_filters:
-                text = pattern.sub('', text)
+                text = pattern.sub("", text)
 
         # Apply non-ASCII filters
         if not self.allow_non_ascii:
             for pattern, _ in self._non_ascii_filters:
-                text = pattern.sub('', text)
+                text = pattern.sub("", text)
 
         # Clean up multiple spaces
-        text = re.sub(r'\s+', ' ', text)
+        text = re.sub(r"\s+", " ", text)
 
         return text.strip()
 
@@ -187,7 +197,7 @@ class TranscriptManager:
             success = self.typer.type_text(text)
             if not success:
                 self.logger.info(f'"Text not typed but saved to: {self.log_file}"')
-        except Exception as e:
+        except Exception:
             self.logger.exception(f'"Failed to type text, saved to: {self.log_file}"')
 
     def track_item_creation(self, item_id: str):
@@ -201,7 +211,9 @@ class TranscriptManager:
             # Check if already completed (race between fallback and realtime API)
             if item_id and item_id in self.item_speech_times:
                 if self.item_speech_times[item_id].get("completed"):
-                    self.logger.debug(f'"Skipping already-completed item {item_id[:20]}"')
+                    self.logger.debug(
+                        f'"Skipping already-completed item {item_id[:20]}"'
+                    )
                     if self.metrics:
                         self.metrics.record_fallback_race()
                     return
@@ -229,8 +241,13 @@ class TranscriptManager:
             else:
                 break
 
-    def _is_fuzzy_duplicate(self, text: str, threshold: float = 0.85,
-                           max_age_seconds: float = 7.0, max_count: int = 7) -> bool:
+    def _is_fuzzy_duplicate(
+        self,
+        text: str,
+        threshold: float = 0.85,
+        max_age_seconds: float = 7.0,
+        max_count: int = 7,
+    ) -> bool:
         """Check if text is a fuzzy duplicate of a recent transcript.
 
         Only considers transcripts within the last max_age_seconds AND
