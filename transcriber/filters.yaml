@@ -40,6 +40,8 @@ hallucinations:
     flags: ignorecase
   - pattern: 'For more information,? go to www\.fema\.gov\.?\s*'
     flags: ignorecase
+  - pattern: 'www\.mooji\.org\.?\s*'
+    flags: ignorecase
 
   # Subtitle watermarks
   - pattern: 'Altyaz.*M\.?\s*K\.?\s*'
