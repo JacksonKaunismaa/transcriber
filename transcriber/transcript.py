@@ -69,7 +69,7 @@ class TranscriptManager:
     def __init__(
         self,
         typer: KeyboardTyper,
-        log_file: Path,
+        log_file: Optional[Path],
         logger: logging.Logger,
         allow_bye_thank_you: bool = False,
         allow_non_ascii: bool = False,
