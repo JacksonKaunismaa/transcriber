@@ -28,6 +28,8 @@ hallucinations:
     flags: ignorecase
   - pattern: 'Thanks for watching!?\s*'
     flags: ignorecase
+  - pattern: 'Thank you so much for watching\s*[\.!]*\s*'
+    flags: ignorecase
   - pattern: "Thanks for tuning in\\.?\\s*(?:We'll talk to you again soon\\.?)?\\s*"
     flags: ignorecase
   - pattern: 'If you don''t have a phone.*see you next time\.?\s*'
