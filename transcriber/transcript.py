@@ -134,6 +134,11 @@ class TranscriptManager:
         except Exception as e:
             self.logger.warning(f'"Failed to reload filters: {e}"')
 
+    # Pattern to detect non-ASCII characters (for hallucination detection)
+    _NON_ASCII_PATTERN = re.compile(r"[^\x20-\x7E]")
+    # Pattern to extract meaningful content (non-punctuation/whitespace)
+    _MEANINGFUL_PATTERN = re.compile(r'[\s\.,!?\-\'\"]+')
+
     def filter_text(self, text: str) -> str:
         """
         Filter text based on configured options and filters.yaml patterns.
@@ -142,6 +147,10 @@ class TranscriptManager:
         - Filters out hallucinations (common false positives from background noise)
         - Filters out filler words (um, uh, hmm, etc.)
         - Filters out non-ASCII characters
+
+        Hallucination filtering uses a 50% rule: if hallucination/non-ASCII filters
+        would remove >=50% of the text, the entire text is discarded (likely a
+        hallucination). This prevents garbage output like single punctuation marks.
         """
         if not text:
             return text
@@ -149,25 +158,59 @@ class TranscriptManager:
         # Reload filters if the YAML config was modified
         self._reload_filters()
 
-        # Apply hallucination filters
+        original = text.strip()
+        original_len = len(original)
+        if original_len == 0:
+            return ""
+
+        # Track if non-ASCII was present (for foreign hallucination detection)
+        had_non_ascii = bool(self._NON_ASCII_PATTERN.search(original))
+
+        # Step 1: Apply hallucination and non-ASCII filters
+        filtered = text
         if not self.allow_bye_thank_you:
             for pattern, _ in self._hallucination_filters:
-                text = pattern.sub("", text)
+                filtered = pattern.sub("", filtered)
 
-        # Apply filler filters
-        if not self.allow_fillers:
-            for pattern, _ in self._filler_filters:
-                text = pattern.sub("", text)
-
-        # Apply non-ASCII filters
         if not self.allow_non_ascii:
             for pattern, _ in self._non_ascii_filters:
-                text = pattern.sub("", text)
+                filtered = pattern.sub("", filtered)
+
+        filtered = re.sub(r"\s+", " ", filtered).strip()
+
+        # Step 2: Apply 50% rule to detect hallucinations
+        # If hallucination filters removed too much, discard the entire text
+        if not filtered:
+            return ""
+
+        removed_pct = (original_len - len(filtered)) / original_len
+
+        # Rule 1: If >=50% was removed, it's likely a hallucination
+        if removed_pct >= 0.5:
+            return ""
+
+        # Rule 2: If remaining text is just punctuation/whitespace, discard
+        remaining_meaningful = self._MEANINGFUL_PATTERN.sub("", filtered)
+        if len(remaining_meaningful) == 0:
+            return ""
+
+        # Rule 3: Very short remaining content with significant removal
+        if len(remaining_meaningful) < 6 and removed_pct > 0.2:
+            return ""
+
+        # Rule 4: Foreign language hallucination (had non-ASCII, short result)
+        if had_non_ascii and len(remaining_meaningful) < 13 and removed_pct > 0.05:
+            return ""
+
+        # Step 3: Apply filler filters (these don't trigger the 50% rule)
+        if not self.allow_fillers:
+            for pattern, _ in self._filler_filters:
+                filtered = pattern.sub("", filtered)
 
         # Clean up multiple spaces
-        text = re.sub(r"\s+", " ", text)
+        filtered = re.sub(r"\s+", " ", filtered)
 
-        return text.strip()
+        return filtered.strip()
 
     def log_transcript(self, text: str, partial: bool = False):
         """Log transcript to file and display in terminal."""
