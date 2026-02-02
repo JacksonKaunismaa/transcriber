@@ -44,6 +44,12 @@ hallucinations:
     flags: ignorecase
   - pattern: 'www\.mooji\.org\.?\s*'
     flags: ignorecase
+  - pattern: 'Beading supplies need!?\s*'
+    flags: ignorecase
+  - pattern: 'Ding(?:-a-ling)+\.{0,3}\s*'
+    flags: ignorecase
+  - pattern: 'All right,? ladies and gentlemen,? we''ll be right back\.?\s*'
+    flags: ignorecase
 
   # Subtitle watermarks
   - pattern: 'Altyaz.*M\.?\s*K\.?\s*'
