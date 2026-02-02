@@ -34,9 +34,6 @@ Examples:
   transcribe -m whisper-1
   transcribe --allow-bye-thank-you    # Disable hallucination filtering
   transcribe --allow-non-ascii        # Allow non-ASCII characters
-  transcribe --noise-suppression 2    # Enable noise suppression (0-4)
-  transcribe --gain 2.0              # Apply 2x volume gain
-  transcribe --no-audio-processing   # Disable all audio processing
 """,
     )
     parser.add_argument(
@@ -60,26 +57,6 @@ Examples:
         "--allow-fillers",
         action="store_true",
         help="Don't filter out filler words (um, uh, hmm, etc.)",
-    )
-    parser.add_argument(
-        "--noise-suppression",
-        "-n",
-        type=int,
-        default=0,
-        choices=[0, 1, 2, 3, 4],
-        help="Noise suppression level (0=off, 1-4=increasing suppression)",
-    )
-    parser.add_argument(
-        "--gain",
-        "-g",
-        type=float,
-        default=1.0,
-        help="Audio gain multiplier (e.g., 2.0 = double volume)",
-    )
-    parser.add_argument(
-        "--no-audio-processing",
-        action="store_true",
-        help="Disable all audio processing (noise suppression and gain)",
     )
     parser.add_argument(
         "--no-log",
@@ -109,17 +86,12 @@ Examples:
         print("[ERROR]   OPENAI_API_KEY=your_api_key_here", file=sys.stderr)
         sys.exit(1)
 
-    noise_suppression = 0 if args.no_audio_processing else args.noise_suppression
-    gain = 1.0 if args.no_audio_processing else args.gain
-
     session = TranscriptionSession(
         api_key,
         model=args.model,
         allow_bye_thank_you=args.allow_bye_thank_you,
         allow_non_ascii=args.allow_non_ascii,
         allow_fillers=args.allow_fillers,
-        noise_suppression=noise_suppression,
-        auto_gain=gain,
         no_log=args.no_log,
     )
 

@@ -24,7 +24,6 @@ from openai import OpenAI
 
 from transcriber.typer import KeyboardTyper
 from transcriber.audio_device import open_audio_stream
-from transcriber.noise_reduction import create_audio_processor
 from transcriber.transcript import TranscriptManager
 from transcriber.audio_buffer import AudioBuffer
 from transcriber.metrics import TranscriptionMetrics
@@ -36,7 +35,6 @@ class TranscriptionSession:
     def __init__(self, api_key: str, model: str = "whisper-1",
                  allow_bye_thank_you: bool = False, allow_non_ascii: bool = False,
                  allow_fillers: bool = False,
-                 noise_suppression: int = 0, auto_gain: float = 1.0,
                  no_log: bool = False):
         self.api_key = api_key
         self.model = model
@@ -46,11 +44,6 @@ class TranscriptionSession:
         self.stream = None
         self.running = False
         self.audio_thread = None
-
-        # Audio processing options
-        self.noise_suppression = noise_suppression
-        self.gain = auto_gain
-        self.audio_processor = None
 
         # Initialize keyboard typer
         self.typer = KeyboardTyper()
@@ -75,7 +68,7 @@ class TranscriptionSession:
 
         self.logger = logging.getLogger(f"transcriber.{timestamp}")
         self.logger.setLevel(logging.DEBUG)
-        if not no_log:
+        if not no_log and self.debug_log_file is not None:
             file_handler = logging.FileHandler(self.debug_log_file, encoding="utf-8")
             file_handler.setLevel(logging.DEBUG)
             file_handler.setFormatter(logging.Formatter(
@@ -285,28 +278,11 @@ class TranscriptionSession:
                 self.running = False
                 return
 
-            if self.noise_suppression > 0 or self.gain != 1.0:
-                self.audio_processor = create_audio_processor(
-                    noise_suppression_level=self.noise_suppression,
-                    gain_multiplier=self.gain,
-                )
-                if self.audio_processor:
-                    print(f"[INFO] Audio processing enabled (noise suppression: {self.noise_suppression}/4, gain: {self.gain}x)")
-                else:
-                    print("[WARNING] webrtc-noise-gain not available, audio processing disabled")
-
             self.audio_buffer.session_start_time = time.time()
 
             while self.running and self.ws:
                 try:
                     audio_chunk = self.stream.read(1024, exception_on_overflow=False)
-
-                    if self.audio_processor:
-                        processed_chunk = self.audio_processor.process_chunk(audio_chunk)
-                        if processed_chunk:
-                            audio_chunk = processed_chunk
-                        else:
-                            continue
 
                     self.audio_buffer.add_audio_chunk(audio_chunk)
 
@@ -350,7 +326,6 @@ class TranscriptionSession:
         self.audio_thread = None
 
         self.ws = None
-        self.audio_processor = None
         self.logger.info('"Session state reset for reconnection"')
 
     def cleanup(self):
