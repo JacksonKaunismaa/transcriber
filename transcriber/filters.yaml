@@ -60,6 +60,12 @@ hallucinations:
     comment: "Arrrr, Rrrrrr, etc."
   - pattern: '\b([A-Za-z])\1{4,}\b\.?\s*'
     comment: "5+ repeated chars"
+  - pattern: '(\w{2,5})\1{4,}'
+    comment: "Repeated syllables (e.g., NINGNINGNING, KINGKINGKING)"
+
+  # Music/lyrics hallucinations
+  - pattern: '♪.*'
+    comment: "Music notes - usually hallucinated lyrics"
 
 # Filler words/sounds
 # Only applied when allow_fillers=False
