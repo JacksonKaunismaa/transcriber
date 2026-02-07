@@ -108,7 +108,7 @@ class TranscriptionSession:
             timeout_seconds=2.5,
             timestamp_margin_ms=200,
             min_duration_ms=300,
-            metrics=self.metrics
+            metrics=self.metrics,
         )
 
         # Share item_speech_times between managers
@@ -272,9 +272,11 @@ class TranscriptionSession:
 
     def stream_audio(self):
         """Capture and stream audio to OpenAI."""
+        self.logger.info('"Audio thread started"')
         try:
             self.stream = open_audio_stream(self.audio, rate=24000, verbose=True)
             if self.stream is None:
+                self.logger.error('"Audio thread exiting: failed to open stream"')
                 self.running = False
                 return
 
@@ -294,16 +296,34 @@ class TranscriptionSession:
                     self.metrics.record_audio_chunk_sent()
 
                 except Exception:
-                    if self.running:
-                        self.logger.exception('"Audio streaming error"')
+                    self.logger.exception(
+                        f'"Audio streaming error (running={self.running}, ws={self.ws is not None})"'
+                    )
                     break
+
+            # Log WHY the loop exited
+            self.logger.info(
+                f'"Audio thread loop exited: running={self.running}, ws={self.ws is not None}"'
+            )
 
         except Exception:
             self.logger.exception('"Failed to open audio stream"')
             self.running = False
+        self.logger.info('"Audio thread ended"')
+
+        # If the audio thread dies while we're supposed to be running,
+        # force-close the WebSocket to trigger a reconnect
+        if self.running and self.ws:
+            self.logger.warning('"Audio thread died — forcing WebSocket reconnect"')
+            self.should_reconnect = True
+            try:
+                self.ws.close()
+            except Exception:
+                pass
 
     def reset_session_state(self):
         """Reset internal state for a new session while preserving log files."""
+        self.logger.info('"reset_session_state: starting"')
         self.transcript_buffer = ""
         self.transcript_manager.reset()
         self.audio_buffer.stop()  # Stop timeout thread before reset to prevent duplicate threads
@@ -311,7 +331,27 @@ class TranscriptionSession:
         # Re-link shared dict after reset (reset creates new dict)
         self.transcript_manager.set_item_speech_times(self.audio_buffer.item_speech_times)
 
-        # Close audio stream to prevent leaking recording instances on reconnect
+        # Try to stop the audio thread gracefully
+        self.ws = None  # Causes audio loop to exit (checks `self.ws`)
+        self.logger.info(f'"reset_session_state: stopping stream (stream={self.stream is not None})"')
+        if self.stream:
+            try:
+                self.stream.stop_stream()
+            except Exception:
+                pass
+
+        audio_thread = self.audio_thread
+        audio_thread_alive = audio_thread is not None and audio_thread.is_alive()
+        self.logger.info(f'"reset_session_state: joining audio thread (alive={audio_thread_alive})"')
+        if audio_thread is not None and audio_thread_alive:
+            audio_thread.join(timeout=2.0)
+
+        if audio_thread is not None and audio_thread.is_alive():
+            self.logger.warning('"reset_session_state: audio thread did not stop within 2s"')
+        self.audio_thread = None
+
+        # Now safe to close the stream — audio thread is no longer reading
+        self.logger.info(f'"reset_session_state: closing stream (stream={self.stream is not None})"')
         if self.stream:
             try:
                 self.stream.stop_stream()
@@ -320,13 +360,7 @@ class TranscriptionSession:
                 pass
             self.stream = None
 
-        # Wait for audio thread to finish before starting a new one
-        if self.audio_thread and self.audio_thread.is_alive():
-            self.audio_thread.join(timeout=2.0)
-        self.audio_thread = None
-
-        self.ws = None
-        self.logger.info('"Session state reset for reconnection"')
+        self.logger.info('"reset_session_state: done"')
 
     def cleanup(self):
         """Clean up resources."""
@@ -334,23 +368,27 @@ class TranscriptionSession:
         self.running = False
         self.audio_buffer.stop()
 
+        # Wait for audio thread to exit before closing stream
+        if self.audio_thread and self.audio_thread.is_alive():
+            self.audio_thread.join(timeout=2.0)
+
         if self.stream:
             try:
                 self.stream.stop_stream()
                 self.stream.close()
-            except:
+            except Exception:
                 pass
 
         if self.audio:
             try:
                 self.audio.terminate()
-            except:
+            except Exception:
                 pass
 
         if self.ws:
             try:
                 self.ws.close()
-            except:
+            except Exception:
                 pass
 
         # Stop periodic metrics logging and write final summary

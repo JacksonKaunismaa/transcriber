@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 
 @dataclass
@@ -89,15 +89,28 @@ class TranscriptionMetrics:
             total_attempts = self.realtime_transcriptions + self.timeouts
             timeout_pct = round(100 * self.timeouts / total_attempts, 1) if total_attempts > 0 else 0
 
+            # Current RSS in MB via /proc/self/status
+            rss_mb = 0
+            try:
+                with open("/proc/self/status") as f:
+                    for line in f:
+                        if line.startswith("VmRSS:"):
+                            rss_mb = int(line.split()[1]) / 1024
+                            break
+            except OSError:
+                pass
+
             stats = (
                 f"METRICS [{minutes}m] | "
+                f"rss:{rss_mb:.0f}MB | "
                 f"realtime:{self.realtime_transcriptions} "
                 f"timeouts:{self.timeouts} ({timeout_pct}%) "
                 f"fallback_ok:{self.fallback_successes} fail_short:{self.fallback_failures_short} fail_long:{self.fallback_failures_long} races:{self.fallback_races} | "
                 f"filtered:{self.content_filtered} dupes:{self.duplicates_filtered} | "
                 f"errors: ws={self.websocket_errors} api={self.api_errors}"
             )
-            self._logger.info(f'"{stats}"')
+            if self._logger:
+                self._logger.info(f'"{stats}"')
 
     def get_session_duration(self) -> float:
         """Get session duration in seconds."""
@@ -193,7 +206,7 @@ class TranscriptionMetrics:
         """Total successful transcriptions (realtime + fallback)."""
         return self.realtime_transcriptions + self.fallback_successes
 
-    def get_summary(self) -> Dict[str, any]:
+    def get_summary(self) -> Dict[str, Any]:
         """Get a summary dictionary of all metrics."""
         with self._lock:
             total_attempts = self.total_transcription_attempts

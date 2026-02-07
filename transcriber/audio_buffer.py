@@ -106,6 +106,41 @@ class AudioBuffer:
         self.audio_buffer = []
         self.item_speech_times = {}
 
+    def _prune_old_data(self):
+        """Remove audio chunks and speech times that are too old to be needed.
+
+        Audio chunks only need to survive long enough for fallback transcription
+        (timeout_seconds + margin). We keep 30s as a generous buffer.
+        """
+        if not self.session_start_time:
+            return
+
+        current_ms = int((time.time() - self.session_start_time) * 1000)
+        cutoff_ms = current_ms - 30_000
+
+        # Prune old audio chunks
+        if self.audio_buffer and self.audio_buffer[0][0] < cutoff_ms:
+            # Binary search for the cutoff point since chunks are time-ordered
+            lo, hi = 0, len(self.audio_buffer)
+            while lo < hi:
+                mid = (lo + hi) // 2
+                if self.audio_buffer[mid][0] < cutoff_ms:
+                    lo = mid + 1
+                else:
+                    hi = mid
+            if lo > 0:
+                del self.audio_buffer[:lo]
+
+        # Prune completed items from speech times
+        # Use list() snapshot — main thread modifies this dict concurrently
+        stale_ids = [
+            item_id for item_id, times in list(self.item_speech_times.items())
+            if times.get("completed") and times.get("stopped_at")
+            and (time.time() - times["stopped_at"]) > 30
+        ]
+        for item_id in stale_ids:
+            del self.item_speech_times[item_id]
+
     def _check_timeouts(self):
         """Check for items that have timed out and need fallback transcription."""
         while self.running:
@@ -113,6 +148,11 @@ class AudioBuffer:
 
             if not self.session_start_time:
                 continue
+
+            try:
+                self._prune_old_data()
+            except Exception:
+                self.logger.exception('"Error in _prune_old_data"')
 
             current_time = time.time()
 

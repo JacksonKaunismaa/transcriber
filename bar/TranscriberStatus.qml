@@ -16,14 +16,19 @@ Rectangle {
     // Property to track service status
     property bool serviceActive: false
     property bool micMuted: Audio.source?.audio?.muted ?? false
+    property bool hovered: false  // Track hover state as property to preserve bindings
 
-    // Three states: gray (off), green (running), orange (running but mic muted)
-    property color activeColor: micMuted ? "#e65100" : "#2e7d32"  // Orange if muted, green if not
-    property color activeHoverColor: micMuted ? "#ff6d00" : "#388e3c"
-    property color inactiveColor: "#757575"
-    property color inactiveHoverColor: "#9e9e9e"
-
-    color: serviceActive ? activeColor : inactiveColor
+    // Compute color as a pure binding - never imperatively assign to `color`
+    // This ensures the color always updates when serviceActive, micMuted, or hovered changes
+    color: {
+        if (!serviceActive) {
+            return hovered ? "#9e9e9e" : "#757575"  // Gray (inactive)
+        }
+        if (micMuted) {
+            return hovered ? "#ff6d00" : "#e65100"  // Orange (muted)
+        }
+        return hovered ? "#388e3c" : "#2e7d32"  // Green (active)
+    }
 
     // Path to the PID file (relative to toggle script location)
     property string pidFile: Qt.resolvedUrl("file://" + transciberProjectPath + "/scripts/.transcribe.pid").toString().replace("file://", "")
@@ -48,37 +53,48 @@ Rectangle {
         }
         cursorShape: Qt.PointingHandCursor
 
-        // Hover effect
+        // Hover effect - just toggle the property, let the binding handle the color
         hoverEnabled: true
-        onEntered: {
-            root.color = serviceActive ? activeHoverColor : inactiveHoverColor
+        onEntered: root.hovered = true
+        onExited: root.hovered = false
+    }
+
+    // Watch the PID file for instant detection of service start/stop
+    FileView {
+        id: pidFileView
+        path: root.pidFile
+        watchChanges: true
+
+        onFileChanged: this.reload()
+
+        onLoaded: {
+            // PID file exists - verify the process is actually alive
+            statusCheckProcess.running = true
         }
-        onExited: {
-            root.color = serviceActive ? activeColor : inactiveColor
+
+        onLoadFailed: error => {
+            if (error == FileViewError.FileNotFound) {
+                root.serviceActive = false
+            }
         }
     }
 
-    // Process to check if transcriber is running
-    // Checks if PID file exists and process is alive
+    // Process to verify the PID from the file is a live process
     Process {
         id: statusCheckProcess
-        command: ["bash", "-c", "test -f '" + pidFile + "' && kill -0 $(cat '" + pidFile + "') 2>/dev/null"]
-        running: true
+        command: ["bash", "-c", "kill -0 $(cat '" + pidFile + "') 2>/dev/null"]
 
         onExited: (exitCode, exitStatus) => {
-            // Exit code 0 means PID file exists and process is running
             serviceActive = (exitCode === 0)
         }
     }
 
-    // Timer to regularly check status (every 3 seconds)
+    // Safety-net timer: catches stale PID files (process crashed but file wasn't cleaned up)
     Timer {
-        interval: 3000
+        interval: 15000
         running: true
         repeat: true
-        onTriggered: {
-            statusCheckProcess.running = true
-        }
+        onTriggered: pidFileView.reload()
     }
 
     // Process to toggle the transcriber
@@ -98,11 +114,6 @@ Rectangle {
         id: toggleTimer
         interval: 500
         repeat: false
-        onTriggered: statusCheckProcess.running = true
-    }
-
-    // Initial status check on load
-    Component.onCompleted: {
-        statusCheckProcess.running = true
+        onTriggered: pidFileView.reload()
     }
 }

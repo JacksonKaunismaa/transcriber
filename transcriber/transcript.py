@@ -104,9 +104,6 @@ class TranscriptManager:
         # Track completed items (shared with audio buffer for race condition prevention)
         self.item_speech_times: Dict[str, dict] = {}
 
-        # Current transcript for session
-        self.current_transcript: List[str] = []
-
     def set_item_speech_times(self, item_speech_times: Dict[str, dict]):
         """Set reference to shared item_speech_times dict from audio buffer."""
         self.item_speech_times = item_speech_times
@@ -229,7 +226,6 @@ class TranscriptManager:
                     f.write(f"[{timestamp}] {text}\n")
                     f.flush()
 
-            self.current_transcript.append(text)
 
     def type_text(self, text: str):
         """Type text using the robust keyboard typer."""
@@ -284,6 +280,11 @@ class TranscriptManager:
             else:
                 break
 
+        # Trim already-flushed entries to prevent unbounded growth
+        if self.next_output_index > 100:
+            self.item_order = self.item_order[self.next_output_index:]
+            self.next_output_index = 0
+
     def _is_fuzzy_duplicate(
         self,
         text: str,
@@ -336,4 +337,3 @@ class TranscriptManager:
         self.completed_transcripts = {}
         self.next_output_index = 0
         # Keep recent_transcripts to prevent duplicates across reconnections
-        self.current_transcript = []
