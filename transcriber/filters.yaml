@@ -6,7 +6,7 @@
 # Controlled by --allow-bye-thank-you flag (disables entire section)
 hallucinations:
   # Common false positives
-  - pattern: '\bBye\.\s*'
+  - pattern: '\bBye[\.!]?\s*'
   - pattern: '\bThank you\.\s*'
   - pattern: '\bMBC\b\.?\s*'
   - pattern: '\bAmen\b\.?\s*'
@@ -53,6 +53,18 @@ hallucinations:
   - pattern: 'Ding(?:-a-ling)+\.{0,3}\s*'
     flags: ignorecase
   - pattern: 'All right,? ladies and gentlemen,? we''ll be right back\.?\s*'
+    flags: ignorecase
+
+  # Affection / rhetorical hallucinations
+  - pattern: 'I love you\.?\s*'
+  - pattern: "Isn't it\\?\\.?\\s*"
+
+  # Sign-off / outro hallucinations
+  - pattern: 'That''s all I''m gonna say\.?\s*'
+    flags: ignorecase
+  - pattern: 'We''ll see you soon\.?\s*'
+    flags: ignorecase
+  - pattern: 'See you soon\.?\s*'
     flags: ignorecase
 
   # Subtitle watermarks
