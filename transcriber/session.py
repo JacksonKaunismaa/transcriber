@@ -391,11 +391,10 @@ class TranscriptionSession:
             except Exception:
                 pass
 
-        # Stop periodic metrics logging and write final summary
+        # Stop periodic metrics logging
         self.metrics.stop()
         if self.conversations_dir is not None:
-            metrics_file = self.metrics.write_summary(self.conversations_dir)
-            self.logger.info(f'"Session ended. Transcription: {self.log_file}, Metrics: {metrics_file}"')
+            self.logger.info(f'"Session ended. Transcription: {self.log_file}"')
         else:
             self.logger.info('"Session ended (no-log mode, files not saved)"')
 

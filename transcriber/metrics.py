@@ -16,8 +16,6 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, Optional
 
 
@@ -106,7 +104,8 @@ class TranscriptionMetrics:
                 f"realtime:{self.realtime_transcriptions} "
                 f"timeouts:{self.timeouts} ({timeout_pct}%) "
                 f"fallback_ok:{self.fallback_successes} fail_short:{self.fallback_failures_short} fail_long:{self.fallback_failures_long} races:{self.fallback_races} | "
-                f"filtered:{self.content_filtered} dupes:{self.duplicates_filtered} | "
+                f"filtered:{self.content_filtered} dupes:{self.duplicates_filtered} short_skipped:{self.short_segments_skipped} | "
+                f"conn:{self.connection_successes}/{self.connection_attempts} expires:{self.session_expirations} reconnects:{self.reconnection_attempts} | "
                 f"errors: ws={self.websocket_errors} api={self.api_errors}"
             )
             if self._logger:
@@ -247,59 +246,3 @@ class TranscriptionMetrics:
                 "overall_success_rate_pct": round(100 * total_success / total_attempts, 1) if total_attempts > 0 else 0.0,
             }
 
-    def write_summary(self, output_dir: Path):
-        """Write a formatted summary to a metrics file."""
-        summary = self.get_summary()
-        duration = summary["session_duration_seconds"]
-        minutes = int(duration // 60)
-        seconds = int(duration % 60)
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        metrics_file = output_dir / f"metrics_{timestamp}.txt"
-
-        lines = [
-            "=" * 50,
-            "TRANSCRIPTION SESSION METRICS",
-            "=" * 50,
-            "",
-            f"Session Duration: {minutes}m {seconds}s",
-            "",
-            "--- Connection ---",
-            f"  Connection attempts:    {summary['connection_attempts']}",
-            f"  Successful connections: {summary['connection_successes']}",
-            f"  Session expirations:    {summary['session_expirations']}",
-            f"  Reconnection attempts:  {summary['reconnection_attempts']}",
-            "",
-            "--- Transcription ---",
-            f"  Realtime API success:   {summary['realtime_transcriptions']}",
-            f"  Timeouts (needed fallback): {summary['timeouts']} ({summary['timeout_rate_pct']}%)",
-            f"  Fallback successes:     {summary['fallback_successes']}",
-            f"  Fallback fail (<1s):    {summary['fallback_failures_short']}",
-            f"  Fallback fail (>=1s):   {summary['fallback_failures_long']}",
-            f"  Fallback races:         {summary['fallback_races']}",
-        ]
-
-        if summary['timeouts'] > 0:
-            lines.append(f"  Fallback success rate:  {summary['fallback_success_rate_pct']}%")
-
-        lines.extend([
-            f"  Overall success rate:   {summary['overall_success_rate_pct']}%",
-            "",
-            "--- Filtering ---",
-            f"  Short segments skipped: {summary['short_segments_skipped']}",
-            f"  Duplicates filtered:    {summary['duplicates_filtered']}",
-            f"  Content filtered:       {summary['content_filtered']}",
-            "",
-            "--- Errors ---",
-            f"  WebSocket errors:       {summary['websocket_errors']}",
-            f"  API errors:             {summary['api_errors']}",
-            "",
-            "--- Audio ---",
-            f"  Audio chunks sent:      {summary['audio_chunks_sent']}",
-            "=" * 50,
-        ])
-
-        with open(metrics_file, "w") as f:
-            f.write("\n".join(lines) + "\n")
-
-        return metrics_file
