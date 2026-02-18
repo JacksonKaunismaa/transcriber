@@ -15,6 +15,8 @@ hallucinations:
     flags: ignorecase
   - pattern: '\bphew\b\.?\s*'
     flags: ignorecase
+  - pattern: '\bPf+t\b[!\.]?\s*'
+    flags: ignorecase
   - pattern: '\bPeace\b\.?\s*'
     flags: ignorecase
   - pattern: '\bHuh\b\.?\s*'
@@ -68,7 +70,8 @@ hallucinations:
 
   # Standalone word hallucinations
   - pattern: '^\s*You[\.!\?]?\s*$'
-    comment: "Standalone 'You' hallucination from background noise"
+    flags: ignorecase
+    comment: "Standalone 'You'/'you' hallucination from background noise"
 
   # Sign-off / outro hallucinations
   - pattern: 'That''s all I''m gonna say\.?\s*'
@@ -78,6 +81,8 @@ hallucinations:
   - pattern: 'See you soon\.?\s*'
     flags: ignorecase
   - pattern: '\bBuh-bye\b\.?\s*'
+    flags: ignorecase
+  - pattern: '\bCheers\b\.?\s*'
     flags: ignorecase
 
   # Subtitle watermarks
@@ -89,6 +94,11 @@ hallucinations:
     comment: "Turkish 'Maybe just...' hallucination"
   - pattern: 'Bonne nuit\.?\s*'
     comment: "French 'Good night' hallucination"
+
+  # Onomatopoeia hallucinations
+  - pattern: '\bVroom\b[,!\.]?\s*(?:\bvroom\b[,!\.]?\s*)*'
+    flags: ignorecase
+    comment: "Vroom, vroom, vroom."
 
   # Exclamatory noise hallucinations
   - pattern: '\bBuh+\b\.?\s*'

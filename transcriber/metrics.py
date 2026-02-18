@@ -185,6 +185,7 @@ class TranscriptionMetrics:
         with self._lock:
             self.content_filtered += 1
 
+
     def record_websocket_error(self):
         """Record a WebSocket error."""
         with self._lock:

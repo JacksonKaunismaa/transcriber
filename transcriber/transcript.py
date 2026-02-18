@@ -104,6 +104,7 @@ class TranscriptManager:
         # Track completed items (shared with audio buffer for race condition prevention)
         self.item_speech_times: Dict[str, dict] = {}
 
+
     def set_item_speech_times(self, item_speech_times: Dict[str, dict]):
         """Set reference to shared item_speech_times dict from audio buffer."""
         self.item_speech_times = item_speech_times
@@ -136,18 +137,13 @@ class TranscriptManager:
     # Pattern to extract meaningful content (non-punctuation/whitespace)
     _MEANINGFUL_PATTERN = re.compile(r'[\s\.,!?\-\'\"]+')
 
-    def filter_text(self, text: str) -> str:
-        """
-        Filter text based on configured options and filters.yaml patterns.
+    def _apply_hallucination_filters(self, text: str) -> str:
+        """Apply hallucination and non-ASCII filters with 50% rule.
 
-        By default:
-        - Filters out hallucinations (common false positives from background noise)
-        - Filters out filler words (um, uh, hmm, etc.)
-        - Filters out non-ASCII characters
-
-        Hallucination filtering uses a 50% rule: if hallucination/non-ASCII filters
-        would remove >=50% of the text, the entire text is discarded (likely a
-        hallucination). This prevents garbage output like single punctuation marks.
+        Returns filtered text, or "" if the text is likely a hallucination.
+        Does NOT apply filler filters — those are normal speech, not hallucinations.
+        Also used by burst detection to distinguish hallucination-heavy windows
+        from normal fast speech with fillers.
         """
         if not text:
             return text
@@ -163,7 +159,7 @@ class TranscriptManager:
         # Track if non-ASCII was present (for foreign hallucination detection)
         had_non_ascii = bool(self._NON_ASCII_PATTERN.search(original))
 
-        # Step 1: Apply hallucination and non-ASCII filters
+        # Apply hallucination and non-ASCII filters
         filtered = text
         if not self.allow_bye_thank_you:
             for pattern, _ in self._hallucination_filters:
@@ -175,7 +171,7 @@ class TranscriptManager:
 
         filtered = re.sub(r"\s+", " ", filtered).strip()
 
-        # Step 2: Apply 50% rule to detect hallucinations
+        # Apply 50% rule to detect hallucinations
         # If hallucination filters removed too much, discard the entire text
         if not filtered:
             return ""
@@ -199,7 +195,21 @@ class TranscriptManager:
         if had_non_ascii and len(remaining_meaningful) < 13 and removed_pct > 0.05:
             return ""
 
-        # Step 3: Apply filler filters (these don't trigger the 50% rule)
+        return filtered
+
+    def filter_text(self, text: str) -> str:
+        """Filter text using hallucination filters, then filler filters.
+
+        Hallucination filtering uses a 50% rule: if hallucination/non-ASCII filters
+        would remove >=50% of the text, the entire text is discarded.
+        Filler filtering (um, uh, hmm) is applied separately and doesn't
+        trigger the 50% rule.
+        """
+        filtered = self._apply_hallucination_filters(text)
+        if not filtered:
+            return ""
+
+        # Apply filler filters (these don't trigger the 50% rule)
         if not self.allow_fillers:
             for pattern, _ in self._filler_filters:
                 filtered = pattern.sub("", filtered)
