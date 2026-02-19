@@ -1,0 +1,230 @@
+mod audio_buffer;
+mod audio_device;
+mod config;
+mod deps;
+mod error;
+mod filters;
+mod messages;
+mod metrics;
+mod transcript;
+mod typer;
+mod websocket;
+
+use std::path::PathBuf;
+
+use chrono::Local;
+use clap::Parser;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info};
+
+use config::Config;
+use messages::{AudioChunk, AudioEvent, MetricsEvent, TranscriptEvent, TypeCommand, WsCommand};
+
+/// Channel buffer sizes.
+/// Audio: 1024 slots ≈ 43s at 24kHz/1024 frames.
+/// Events: smaller since they're event-driven, not continuous.
+const AUDIO_CHANNEL_SIZE: usize = 1024;
+const EVENT_CHANNEL_SIZE: usize = 256;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
+    let config = Config::parse();
+    let api_key = Config::api_key().ok_or(error::TranscriberError::MissingApiKey)?;
+
+    // Set up logging
+    let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let (log_file, debug_log_file) = if config.no_log {
+        (None, None)
+    } else {
+        let dir = PathBuf::from("conversations");
+        std::fs::create_dir_all(&dir)?;
+        (
+            Some(dir.join(format!("transcription_{timestamp}.txt"))),
+            Some(dir.join(format!("debug_events_{timestamp}.jsonl"))),
+        )
+    };
+
+    setup_tracing(&debug_log_file);
+
+    println!();
+    println!("{}", "=".repeat(60));
+    println!("Real-Time Transcription with OpenAI (Rust)");
+    println!("{}", "=".repeat(60));
+    println!();
+
+    deps::check_system_dependencies();
+
+    info!(api_key_len = api_key.len(), model = %config.model, "Session starting");
+
+    // ── Create channels ──────────────────────────────────────────────
+
+    let (audio_tx, audio_rx) = mpsc::channel::<AudioChunk>(AUDIO_CHANNEL_SIZE);
+    let (ws_cmd_tx, mut ws_cmd_rx) = mpsc::channel::<WsCommand>(EVENT_CHANNEL_SIZE);
+    let (audio_event_tx, audio_event_rx) = mpsc::channel::<AudioEvent>(EVENT_CHANNEL_SIZE);
+    let (transcript_tx, transcript_rx) = mpsc::channel::<TranscriptEvent>(EVENT_CHANNEL_SIZE);
+    let (type_tx, type_rx) = mpsc::channel::<TypeCommand>(EVENT_CHANNEL_SIZE);
+    let (metrics_tx, metrics_rx) = mpsc::channel::<MetricsEvent>(EVENT_CHANNEL_SIZE);
+
+    // ── Cancellation ─────────────────────────────────────────────────
+
+    let root_token = CancellationToken::new();
+
+    let shutdown_token = root_token.clone();
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.ok();
+        println!("\n[INFO] Ctrl+C received, shutting down...");
+        shutdown_token.cancel();
+    });
+
+    // ── Spawn long-lived tasks ───────────────────────────────────────
+
+    let metrics_handle = tokio::spawn(metrics::run_metrics_task(
+        metrics_rx,
+        root_token.child_token(),
+        debug_log_file.clone(),
+    ));
+
+    let typer_handle = tokio::spawn(typer::run_typer_task(
+        type_rx,
+        root_token.child_token(),
+    ));
+
+    let transcript_handle = tokio::spawn(transcript::run_transcript_task(
+        transcript_rx,
+        type_tx,
+        metrics_tx.clone(),
+        root_token.child_token(),
+        config.clone(),
+        log_file.clone(),
+    ));
+
+    let audio_router_handle = tokio::spawn(audio_buffer::run_audio_router_task(
+        audio_rx,
+        audio_event_rx,
+        ws_cmd_tx,
+        transcript_tx.clone(),
+        metrics_tx.clone(),
+        root_token.child_token(),
+        api_key.clone(),
+    ));
+
+    // Start audio capture
+    audio_device::start_audio_capture(audio_tx, root_token.child_token())?;
+    println!("[INFO] Starting audio capture...");
+
+    // ── Reconnection loop ────────────────────────────────────────────
+    //
+    // Unlike spawned tasks, the WebSocket connection runs inline here.
+    // ws_cmd_rx is passed by &mut so it survives across reconnections.
+
+    let mut reconnect_attempts: u32 = 0;
+    let max_reconnect_attempts: u32 = 10;
+
+    loop {
+        if root_token.is_cancelled() {
+            break;
+        }
+
+        if reconnect_attempts == 0 {
+            println!("[INFO] Connecting to OpenAI...");
+        } else {
+            println!("[INFO] Reconnecting to OpenAI (attempt {reconnect_attempts})...");
+        }
+
+        metrics_tx.send(MetricsEvent::ConnectionAttempt).await.ok();
+
+        let result = websocket::run_connection(
+            &api_key,
+            &config.model,
+            &mut ws_cmd_rx,
+            &audio_event_tx,
+            &transcript_tx,
+            &metrics_tx,
+            &root_token,
+        )
+        .await;
+
+        match result {
+            websocket::ConnectionResult::Done => break,
+            websocket::ConnectionResult::Reconnect => {
+                if root_token.is_cancelled() {
+                    break;
+                }
+
+                reconnect_attempts += 1;
+                if reconnect_attempts > max_reconnect_attempts {
+                    error!("Max reconnection attempts ({max_reconnect_attempts}) exceeded");
+                    break;
+                }
+
+                let delay = 1.0_f64 * 2.0_f64.powi(reconnect_attempts as i32 - 1);
+                let delay = delay.min(30.0);
+                println!("[INFO] Reconnecting in {delay:.1}s...");
+                tokio::time::sleep(std::time::Duration::from_secs_f64(delay)).await;
+
+                metrics_tx
+                    .send(MetricsEvent::ReconnectionAttempt)
+                    .await
+                    .ok();
+
+                // Reset attempts on successful reconnect (done inside the WS task
+                // when it prints "connected" — but we track here too)
+                reconnect_attempts = 0;
+            }
+        }
+    }
+
+    // ── Shutdown ─────────────────────────────────────────────────────
+
+    println!("\n[INFO] Shutting down...");
+    root_token.cancel();
+
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        let _ = metrics_handle.await;
+        let _ = typer_handle.await;
+        let _ = transcript_handle.await;
+        let _ = audio_router_handle.await;
+    })
+    .await;
+
+    if let Some(ref log) = log_file {
+        println!("[INFO] Transcription saved to: {}", log.display());
+    }
+    println!("[INFO] Session ended.");
+
+    Ok(())
+}
+
+fn setup_tracing(debug_log_file: &Option<PathBuf>) {
+    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    if let Some(path) = debug_log_file {
+        let file = std::fs::File::create(path).expect("Failed to create debug log file");
+        let file_layer = fmt::layer()
+            .json()
+            .with_writer(std::sync::Mutex::new(file))
+            .with_target(false);
+
+        let stderr_layer = fmt::layer()
+            .with_writer(std::io::stderr)
+            .with_target(false)
+            .with_level(true)
+            .with_filter(EnvFilter::new("warn"));
+
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(file_layer)
+            .with(stderr_layer)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_writer(std::io::stderr)
+            .init();
+    }
+}

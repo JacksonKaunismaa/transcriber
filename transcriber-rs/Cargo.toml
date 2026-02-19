@@ -1,0 +1,60 @@
+[package]
+name = "transcriber"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+
+# WebSocket
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+
+# Audio capture
+cpal = "0.15"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# Regex (fancy-regex supports backreferences needed by filter patterns)
+regex = "1"
+fancy-regex = "0.14"
+
+# Fuzzy string matching (gestalt / Ratcliff-Obershelp)
+strsim = "0.11"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+
+# .env loading
+dotenvy = "0.15"
+
+# File watching (hot-reload)
+notify = "7"
+
+# Base64 encoding
+base64 = "0.22"
+
+# WAV file creation
+hound = "3"
+
+# Timestamps
+chrono = "0.4"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# HTTP client (for Whisper REST API)
+reqwest = { version = "0.12", features = ["json", "multipart", "native-tls"] }
+
+# Misc
+futures-util = "0.3"
+url = "2"
