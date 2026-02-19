@@ -67,18 +67,22 @@ fi
 # Change to project root (parent of scripts directory)
 cd "$SCRIPT_DIR/.."
 
-# Ensure uv is in PATH (add common locations)
-export PATH="/usr/bin:/usr/local/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+# Use the Rust binary (release build)
+TRANSCRIBER="$SCRIPT_DIR/../transcriber-rs/target/release/transcriber"
 
-# Find uv
-UV_PATH=$(which uv 2>/dev/null)
-if [ -z "$UV_PATH" ]; then
-    send_notification "Transcription" "Failed to start: uv not found" "dialog-error"
-    exit 1
+if [ ! -x "$TRANSCRIBER" ]; then
+    # Fallback to Python if Rust binary not built
+    export PATH="/usr/bin:/usr/local/bin:$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+    UV_PATH=$(which uv 2>/dev/null)
+    if [ -z "$UV_PATH" ]; then
+        send_notification "Transcription" "Failed to start: no binary found" "dialog-error"
+        exit 1
+    fi
+    TRANSCRIBER="$UV_PATH run transcribe"
 fi
 
 # Start transcription in background and save PID
-nohup "$UV_PATH" run transcribe > "$LOG_FILE" 2>&1 &
+nohup $TRANSCRIBER > "$LOG_FILE" 2>&1 &
 PID=$!
 
 echo "$PID" > "$PID_FILE"
