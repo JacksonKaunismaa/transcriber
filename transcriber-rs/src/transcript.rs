@@ -198,11 +198,7 @@ async fn output_transcript(state: &mut TranscriptState, transcript: &str) {
         }
 
         log_transcript(&filtered, false);
-
-        // Write to log file
-        if let Some(ref path) = state.log_file {
-            write_to_log(path, &filtered);
-        }
+        info!("Transcript output: {filtered}");
 
         // Send to typer
         state
@@ -334,13 +330,6 @@ fn log_transcript(text: &str, partial: bool) {
     println!("{prefix}{text}");
 }
 
-fn write_to_log(path: &Path, text: &str) {
-    use std::io::Write;
-    let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
-    if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open(path) {
-        let _ = writeln!(f, "[{timestamp}] {text}");
-    }
-}
 
 fn find_filters_yaml() -> PathBuf {
     // Look for filters.yaml relative to the binary, then in common locations

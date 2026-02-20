@@ -351,6 +351,7 @@ async fn handle_server_event(
                 .ok();
             if let Some(transcript) = &event.transcript {
                 if !transcript.is_empty() {
+                    info!("Realtime transcription: {transcript}");
                     if let Some(item_id) = &event.item_id {
                         transcript_tx
                             .send(TranscriptEvent::RealtimeCompleted {

@@ -27,6 +27,8 @@ hallucinations:
     flags: ignorecase
   - pattern: '\bPoof\b[!\.]?\s*'
     flags: ignorecase
+  - pattern: '\bBoop\b[!\.]?\s*'
+    flags: ignorecase
   - pattern: '\b[Oo]m+\s*[Nn]om+(\s*[Nn]om+)*\b\.?\s*'
   - pattern: '\bOink[!\.]?\s*(?:Oink[!\.]?\s*)*'
     flags: ignorecase
@@ -41,6 +43,9 @@ hallucinations:
   - pattern: "Thanks for tuning in\\.?\\s*(?:We'll talk to you again soon\\.?)?\\s*"
     flags: ignorecase
   - pattern: 'If you don''t have a phone.*see you next time\.?\s*'
+    flags: ignorecase
+
+  - pattern: 'Please leave a comment below[!\.]?\s*'
     flags: ignorecase
 
   # Website hallucinations
@@ -65,13 +70,16 @@ hallucinations:
     flags: ignorecase
 
   # Affection / rhetorical hallucinations
-  - pattern: 'I love you\.?\s*'
+  - pattern: 'I love (?:you|her|him)\.?\s*'
   - pattern: "Isn't it\\?\\.?\\s*"
 
   # Standalone word hallucinations
   - pattern: '^\s*You[\.!\?]?\s*$'
     flags: ignorecase
     comment: "Standalone 'You'/'you' hallucination from background noise"
+  - pattern: '\bBitch\b[!\.]?\s*'
+    flags: ignorecase
+    comment: "Profanity hallucination from background noise"
 
   # Sign-off / outro hallucinations
   - pattern: 'That''s all I''m gonna say\.?\s*'
@@ -112,6 +120,9 @@ hallucinations:
     comment: "Arrrr, Rrrrrr, etc."
   - pattern: '\b([A-Za-z])\1{4,}\b\.?\s*'
     comment: "5+ repeated chars"
+  - pattern: '\b([a-zA-Z])\1{2,}(?:([a-zA-Z])\2{1,})+\b\.?\s*'
+    flags: ignorecase
+    comment: "Multi-group repeated-char gibberish (e.g., gggggghhh)"
   - pattern: '(\w{2,5})\1{4,}'
     comment: "Repeated syllables (e.g., NINGNINGNING, KINGKINGKING)"
   - pattern: '([A-Za-z])(?:-\1){3,}\.?\s*'
