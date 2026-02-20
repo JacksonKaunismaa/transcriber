@@ -1,10 +1,98 @@
+use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::messages::MetricsEvent;
+
+/// Timestamped transcription outcome for sliding window stats.
+#[derive(Clone, Copy)]
+enum Outcome {
+    Realtime,
+    Timeout,
+    FallbackOk,
+    FallbackFail,
+    Filtered,
+}
+
+/// Aggregated counts for a time window.
+struct WindowCounts {
+    realtime: u64,
+    timeouts: u64,
+    fallback_ok: u64,
+    fallback_fail: u64,
+    filtered: u64,
+}
+
+impl WindowCounts {
+    /// Format as a compact string: `rt:12 to:3 (80%) fb:1/4 filt:0`
+    fn format(&self) -> String {
+        let total = self.realtime + self.timeouts;
+        let ok_pct = if total > 0 {
+            (100 * self.realtime) as f64 / total as f64
+        } else {
+            0.0
+        };
+        let fb_total = self.fallback_ok + self.fallback_fail;
+        format!(
+            "rt:{} to:{} ({:.0}%) fb:{}/{} filt:{}",
+            self.realtime, self.timeouts, ok_pct, self.fallback_ok, fb_total, self.filtered,
+        )
+    }
+}
+
+/// Sliding window tracking recent transcription outcomes.
+struct RecentWindow {
+    events: VecDeque<(Instant, Outcome)>,
+}
+
+impl RecentWindow {
+    fn new() -> Self {
+        Self {
+            events: VecDeque::new(),
+        }
+    }
+
+    fn push(&mut self, outcome: Outcome) {
+        self.events.push_back((Instant::now(), outcome));
+    }
+
+    /// Prune entries older than `max_age` (the largest window we care about).
+    fn prune(&mut self, max_age: Duration) {
+        let cutoff = Instant::now() - max_age;
+        while self.events.front().is_some_and(|(t, _)| *t < cutoff) {
+            self.events.pop_front();
+        }
+    }
+
+    /// Count outcomes within the last `window` duration.
+    fn counts(&self, window: Duration) -> WindowCounts {
+        let cutoff = Instant::now() - window;
+        let mut c = WindowCounts {
+            realtime: 0,
+            timeouts: 0,
+            fallback_ok: 0,
+            fallback_fail: 0,
+            filtered: 0,
+        };
+        for (t, outcome) in self.events.iter().rev() {
+            if *t < cutoff {
+                break;
+            }
+            match outcome {
+                Outcome::Realtime => c.realtime += 1,
+                Outcome::Timeout => c.timeouts += 1,
+                Outcome::FallbackOk => c.fallback_ok += 1,
+                Outcome::FallbackFail => c.fallback_fail += 1,
+                Outcome::Filtered => c.filtered += 1,
+            }
+        }
+        c
+    }
+}
 
 /// Metrics counters, owned exclusively by the metrics task.
 /// No locks needed — only this task reads/writes these.
@@ -13,7 +101,6 @@ struct Metrics {
     connection_successes: u64,
     session_expirations: u64,
     reconnection_attempts: u64,
-    audio_chunks_sent: u64,
     realtime_transcriptions: u64,
     timeouts: u64,
     fallback_successes: u64,
@@ -25,7 +112,8 @@ struct Metrics {
     content_filtered: u64,
     websocket_errors: u64,
     api_errors: u64,
-    start_time: std::time::Instant,
+    start_time: Instant,
+    recent: RecentWindow,
 }
 
 impl Metrics {
@@ -35,7 +123,6 @@ impl Metrics {
             connection_successes: 0,
             session_expirations: 0,
             reconnection_attempts: 0,
-            audio_chunks_sent: 0,
             realtime_transcriptions: 0,
             timeouts: 0,
             fallback_successes: 0,
@@ -47,7 +134,8 @@ impl Metrics {
             content_filtered: 0,
             websocket_errors: 0,
             api_errors: 0,
-            start_time: std::time::Instant::now(),
+            start_time: Instant::now(),
+            recent: RecentWindow::new(),
         }
     }
 
@@ -57,54 +145,69 @@ impl Metrics {
             MetricsEvent::ConnectionSuccess => self.connection_successes += 1,
             MetricsEvent::SessionExpiration => self.session_expirations += 1,
             MetricsEvent::ReconnectionAttempt => self.reconnection_attempts += 1,
-            MetricsEvent::AudioChunkSent => self.audio_chunks_sent += 1,
-            MetricsEvent::RealtimeTranscription => self.realtime_transcriptions += 1,
-            MetricsEvent::Timeout => self.timeouts += 1,
-            MetricsEvent::FallbackSuccess => self.fallback_successes += 1,
+            MetricsEvent::AudioChunkSent => {} // not tracked
+            MetricsEvent::RealtimeTranscription => {
+                self.realtime_transcriptions += 1;
+                self.recent.push(Outcome::Realtime);
+            }
+            MetricsEvent::Timeout => {
+                self.timeouts += 1;
+                self.recent.push(Outcome::Timeout);
+            }
+            MetricsEvent::FallbackSuccess => {
+                self.fallback_successes += 1;
+                self.recent.push(Outcome::FallbackOk);
+            }
             MetricsEvent::FallbackFailure { duration_ms } => {
                 if duration_ms >= 1000 {
                     self.fallback_failures_long += 1;
                 } else {
                     self.fallback_failures_short += 1;
                 }
+                self.recent.push(Outcome::FallbackFail);
             }
             MetricsEvent::FallbackRace => self.fallback_races += 1,
             MetricsEvent::ShortSegmentSkipped => self.short_segments_skipped += 1,
             MetricsEvent::DuplicateFiltered => self.duplicates_filtered += 1,
-            MetricsEvent::ContentFiltered => self.content_filtered += 1,
+            MetricsEvent::ContentFiltered => {
+                self.content_filtered += 1;
+                self.recent.push(Outcome::Filtered);
+            }
             MetricsEvent::WebSocketError => self.websocket_errors += 1,
             MetricsEvent::ApiError => self.api_errors += 1,
         }
     }
 
-    fn log_stats(&self) {
+    fn log_stats(&mut self) {
         let minutes = self.start_time.elapsed().as_secs() / 60;
-        let total_attempts = self.realtime_transcriptions + self.timeouts;
-        let timeout_pct = if total_attempts > 0 {
-            (100 * self.timeouts) as f64 / total_attempts as f64
-        } else {
-            0.0
-        };
-
         let rss_mb = get_rss_mb();
 
+        // Prune entries older than 1 hour
+        self.recent.prune(Duration::from_secs(60 * 60));
+
+        let w5m = self.recent.counts(Duration::from_secs(5 * 60));
+        let w1h = self.recent.counts(Duration::from_secs(60 * 60));
+
+        // All-time counts reuse the cumulative counters
+        let wall = WindowCounts {
+            realtime: self.realtime_transcriptions,
+            timeouts: self.timeouts,
+            fallback_ok: self.fallback_successes,
+            fallback_fail: self.fallback_failures_short + self.fallback_failures_long,
+            filtered: self.content_filtered,
+        };
+
         let stats = format!(
-            "METRICS [{minutes}m] | \
-             rss:{rss_mb:.0}MB | \
-             realtime:{rt} timeouts:{to} ({tp:.1}%) \
-             fallback_ok:{fok} fail_short:{fs} fail_long:{fl} races:{fr} | \
-             filtered:{cf} dupes:{df} short_skipped:{ss} | \
+            "METRICS [{minutes}m] | rss:{rss_mb:.0}MB | \
+             5m: {w5m} | 1h: {w1h} | all: {wall} | \
+             races:{races} dupes:{dupes} short_skip:{ss} | \
              conn:{cs}/{ca} expires:{se} reconnects:{ra} | \
              errors: ws={we} api={ae}",
-            rt = self.realtime_transcriptions,
-            to = self.timeouts,
-            tp = timeout_pct,
-            fok = self.fallback_successes,
-            fs = self.fallback_failures_short,
-            fl = self.fallback_failures_long,
-            fr = self.fallback_races,
-            cf = self.content_filtered,
-            df = self.duplicates_filtered,
+            w5m = w5m.format(),
+            w1h = w1h.format(),
+            wall = wall.format(),
+            races = self.fallback_races,
+            dupes = self.duplicates_filtered,
             ss = self.short_segments_skipped,
             cs = self.connection_successes,
             ca = self.connection_attempts,
@@ -125,7 +228,7 @@ pub async fn run_metrics_task(
     _debug_log_file: Option<PathBuf>,
 ) {
     let mut metrics = Metrics::new();
-    let mut log_interval = tokio::time::interval(std::time::Duration::from_secs(60));
+    let mut log_interval = tokio::time::interval(Duration::from_secs(60));
     log_interval.tick().await; // Consume initial tick
 
     loop {
