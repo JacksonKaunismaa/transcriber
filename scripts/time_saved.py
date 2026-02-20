@@ -20,17 +20,49 @@ DEFAULT_CONVERSATIONS_DIR = Path(__file__).parent.parent / "conversations"
 
 
 def parse_speech_transcripts(conversations_dir: Path) -> list[dict]:
-    """Parse speech transcripts into entries with timestamps and char count."""
-    entries = []
-    pattern = r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] (.+)'
+    """Parse speech transcripts from debug JSONL files.
 
+    Reads 'Transcript output: ...' entries from debug_events_*.jsonl files,
+    with fallback to legacy transcription_*.txt files.
+    """
+    entries = []
+
+    # Parse JSONL debug logs (current format)
+    for filepath in sorted(conversations_dir.glob("debug_events_*.jsonl")):
+        for line in filepath.read_text().split('\n'):
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            msg = event.get("fields", {}).get("message", "")
+            if not msg.startswith("Transcript output: "):
+                continue
+            text = msg[len("Transcript output: "):]
+            ts_str = event.get("timestamp", "")
+            if not ts_str:
+                continue
+            # Parse ISO 8601 UTC timestamp, convert to local naive time
+            # (matches legacy .txt format which used local time)
+            ts_utc = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            ts = ts_utc.astimezone().replace(tzinfo=None)
+            entries.append({'timestamp': ts, 'text': text, 'chars': len(text)})
+
+    # Also parse legacy .txt files (historical data before JSONL migration)
+    # These use local time (naive), so we keep them naive for consistency
+    jsonl_timestamps = {e['timestamp'] for e in entries}
+    txt_pattern = r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] (.+)'
     for filepath in sorted(conversations_dir.glob("transcription_*.txt")):
         for line in filepath.read_text().split('\n'):
-            match = re.match(pattern, line)
+            match = re.match(txt_pattern, line)
             if match:
                 ts_str, text = match.groups()
                 ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-                entries.append({'timestamp': ts, 'text': text, 'chars': len(text)})
+                # Skip if we already have JSONL data at this timestamp (avoid dupes
+                # from sessions that wrote both formats)
+                if ts not in jsonl_timestamps:
+                    entries.append({'timestamp': ts, 'text': text, 'chars': len(text)})
 
     entries.sort(key=lambda e: e['timestamp'])
     return entries

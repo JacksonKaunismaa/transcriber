@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use regex::Regex;
 use tokio::sync::mpsc;
@@ -30,8 +30,6 @@ struct TranscriptState {
     allow_bye_thank_you: bool,
     allow_non_ascii: bool,
     allow_fillers: bool,
-    /// Log file path
-    log_file: Option<PathBuf>,
     /// Channels
     type_tx: mpsc::Sender<TypeCommand>,
     metrics_tx: mpsc::Sender<MetricsEvent>,
@@ -68,7 +66,6 @@ pub async fn run_transcript_task(
     metrics_tx: mpsc::Sender<MetricsEvent>,
     cancel: CancellationToken,
     config: Config,
-    log_file: Option<PathBuf>,
 ) {
     // Locate filters.yaml (same path as Python version)
     let filters_path = find_filters_yaml();
@@ -85,7 +82,6 @@ pub async fn run_transcript_task(
         allow_bye_thank_you: config.allow_bye_thank_you,
         allow_non_ascii: config.allow_non_ascii,
         allow_fillers: config.allow_fillers,
-        log_file,
         type_tx,
         metrics_tx,
     };

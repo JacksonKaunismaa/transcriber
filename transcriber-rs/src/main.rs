@@ -35,15 +35,12 @@ async fn main() -> anyhow::Result<()> {
 
     // Set up logging
     let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
-    let (log_file, debug_log_file) = if config.no_log {
-        (None, None)
+    let debug_log_file = if config.no_log {
+        None
     } else {
         let dir = PathBuf::from("conversations");
         std::fs::create_dir_all(&dir)?;
-        (
-            Some(dir.join(format!("transcription_{timestamp}.txt"))),
-            Some(dir.join(format!("debug_events_{timestamp}.jsonl"))),
-        )
+        Some(dir.join(format!("debug_events_{timestamp}.jsonl")))
     };
 
     setup_tracing(&debug_log_file);
@@ -97,7 +94,6 @@ async fn main() -> anyhow::Result<()> {
         metrics_tx.clone(),
         root_token.child_token(),
         config.clone(),
-        log_file.clone(),
     ));
 
     let audio_router_handle = tokio::spawn(audio_buffer::run_audio_router_task(
@@ -189,8 +185,8 @@ async fn main() -> anyhow::Result<()> {
     })
     .await;
 
-    if let Some(ref log) = log_file {
-        println!("[INFO] Transcription saved to: {}", log.display());
+    if let Some(ref log) = debug_log_file {
+        println!("[INFO] Debug log saved to: {}", log.display());
     }
     println!("[INFO] Session ended.");
 
