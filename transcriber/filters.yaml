@@ -57,6 +57,8 @@ hallucinations:
     flags: ignorecase
   - pattern: 'www\.mooji\.org\.?\s*'
     flags: ignorecase
+  - pattern: 'www\.globalonenessproject\.org\.?\s*'
+    flags: ignorecase
   - pattern: 'www\.mytrendyphone\.co\.uk\.?\s*'
     flags: ignorecase
   - pattern: '(?:www\.(?:youtube|facebook|instagram)\.com\s*(?:or\s*)?){1,}\.?\s*'

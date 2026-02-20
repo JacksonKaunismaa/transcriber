@@ -142,19 +142,6 @@ uv run transcribe --allow-non-ascii
 uv run transcribe --no-log
 ```
 
-### Audio Processing
-
-```bash
-# Enable noise suppression (0=off, 1-4=increasing levels)
-uv run transcribe --noise-suppression 2
-
-# Apply audio gain (e.g., 2.0 = double volume)
-uv run transcribe --gain 2.0
-
-# Disable all audio processing
-uv run transcribe --no-audio-processing
-```
-
 To see all options:
 ```bash
 uv run transcribe --help

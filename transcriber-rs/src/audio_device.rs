@@ -15,7 +15,7 @@ const TARGET_RATE: u32 = 24000;
 const ERROR_THRESHOLD: u64 = 50;
 
 /// Maximum consecutive rebuild attempts before giving up.
-/// PipeWire can crash-loop 6+ times during DeepFilter underruns,
+/// PipeWire can crash-loop during audio filter failures or device re-enumeration,
 /// so this needs enough headroom to ride out the instability.
 const MAX_REBUILDS: u32 = 15;
 
