@@ -91,9 +91,8 @@ fn try_build_stream(
                 },
                 move |err| {
                     let n = err_count.fetch_add(1, Ordering::Relaxed);
-                    // Rate-limit logging: only every 1000th error
-                    if n % 1000 == 0 {
-                        error!("Audio stream error (#{n}): {err}");
+                    if n == 0 {
+                        error!("Audio stream error: {err}");
                     }
                 },
                 None,
