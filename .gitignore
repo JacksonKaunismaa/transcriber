@@ -23,3 +23,4 @@ conversations/
 # Development notes
 CLAUDE.md
 scripts/time_saved.png
+.claude/
