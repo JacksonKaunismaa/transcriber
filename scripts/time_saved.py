@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["matplotlib"]
+# ///
 """
 Generate a report of time saved by voice transcription.
 

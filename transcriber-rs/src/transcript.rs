@@ -330,7 +330,6 @@ fn log_transcript(text: &str, partial: bool) {
 fn find_filters_yaml() -> PathBuf {
     // Look for filters.yaml relative to the binary, then in common locations
     let candidates = [
-        PathBuf::from("transcriber/filters.yaml"),
         PathBuf::from("filters.yaml"),
     ];
 

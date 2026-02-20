@@ -6,7 +6,7 @@ Utility scripts for managing and using the transcriber.
 
 ### `toggle_transcribe.sh`
 
-Toggle transcription on/off with desktop notifications.
+Toggle transcription on/off with desktop notifications. Uses the Rust binary (`transcriber-rs/target/release/transcriber`) by default.
 
 **Usage:**
 ```bash
@@ -45,13 +45,15 @@ Install the TranscriberStatus widget into a Quickshell bar.
 
 Generate a report showing time saved by voice transcription vs manual typing.
 
+Requires Python and [uv](https://docs.astral.sh/uv/). Dependencies are installed automatically via inline script metadata.
+
 **Usage:**
 ```bash
 uv run scripts/time_saved.py
 ```
 
 **What it does:**
-- Analyzes `conversations/typing_log.txt` to measure actual typing time
+- Analyzes transcription logs from `conversations/` (JSONL debug events and legacy .txt files)
 - Uses pre-computed ratio distributions from `ratio_distributions.json`
 - Estimates how long manual typing would have taken
 - Generates a plot showing cumulative time saved over time

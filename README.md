@@ -1,6 +1,6 @@
 # Real-Time Transcription Tool
 
-A real-time audio transcription tool that captures your microphone input, transcribes it using OpenAI's Realtime API, and automatically types the text into any active window. All transcriptions are also saved to files and displayed in the terminal.
+A real-time audio transcription tool that captures your microphone input, transcribes it using OpenAI's Realtime API, and automatically types the text into any active window. All transcriptions are also saved to log files and displayed in the terminal.
 
 ## Design Philosophy
 
@@ -16,24 +16,29 @@ This tool is built for people who use AI assistants heavily and want to talk to 
 - **Real-time transcription** using OpenAI's GPT-4 Realtime API
 - **Automatic typing** into any active window (works everywhere!)
 - **Smart filtering** removes hallucinations, filler words, and non-ASCII characters by default
+- **Hot-reload filters** - edit `filters.yaml` while running, no restart needed
+- **Adaptive typing** - detects the focused window and picks the best typing method
 - **Triple redundancy**: Terminal display + file logging + keyboard typing
-- **Conversation archiving** in timestamped files
+- **Conversation archiving** in timestamped JSONL files
 - **Graceful error handling** with recovery mechanisms
-- **Zero activation needed** - uses `uv run` for instant execution
 
 ## Setup
 
-### 1. Install uv (if you haven't already)
+### 1. Install Rust (if you haven't already)
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-### 2. Clone or navigate to this directory
+### 2. Clone and build
 
 ```bash
+git clone https://github.com/JacksonKaunismaa/transcriber.git
 cd transcriber
+cd transcriber-rs && cargo build --release
 ```
+
+The binary will be at `transcriber-rs/target/release/transcriber`.
 
 ### 3. Set up your API key
 
@@ -50,20 +55,6 @@ OPENAI_API_KEY=sk-proj-...your-key-here...
 ```
 
 ### 4. Install system dependencies (Linux)
-
-For the transcriber to work properly, you'll need:
-
-**PortAudio** (for audio capture):
-```bash
-# Ubuntu/Debian
-sudo apt-get install portaudio19-dev python3-pyaudio
-
-# Fedora
-sudo dnf install portaudio-devel
-
-# Arch
-sudo pacman -S portaudio
-```
 
 **Keyboard typing tool:**
 
@@ -92,10 +83,10 @@ The tool automatically detects your display server. On Wayland, it uses Shift+In
 
 ## Usage
 
-No need to activate a virtual environment! Just run:
+Run the binary from the project root (so it can find `filters.yaml` and `.env`):
 
 ```bash
-uv run transcribe
+./transcriber-rs/target/release/transcriber
 ```
 
 ### Model Selection
@@ -104,13 +95,13 @@ The tool supports three transcription models. Use the `--model` or `-m` flag to 
 
 ```bash
 # Default: Whisper (most accurate)
-uv run transcribe
+./transcriber-rs/target/release/transcriber
 
 # GPT-4o transcription (fast, high quality)
-uv run transcribe --model gpt-4o-transcribe
+./transcriber-rs/target/release/transcriber --model gpt-4o-transcribe
 
 # GPT-4o mini (faster, lower cost)
-uv run transcribe -m gpt-4o-mini-transcribe
+./transcriber-rs/target/release/transcriber -m gpt-4o-mini-transcribe
 ```
 
 **Available models:**
@@ -127,24 +118,26 @@ By default, the tool filters out common false positives to improve transcription
 - **Filler words** - um, uh, hmm, mhm, etc.
 - **Non-ASCII characters** - emojis, accented characters, CJK, etc.
 
+Filter patterns are defined in `filters.yaml` and hot-reloaded when the file changes.
+
 **Disable filtering when needed:**
 ```bash
 # Disable hallucination filtering
-uv run transcribe --allow-bye-thank-you
+./transcriber-rs/target/release/transcriber --allow-bye-thank-you
 
 # Allow filler words (um, uh, hmm)
-uv run transcribe --allow-fillers
+./transcriber-rs/target/release/transcriber --allow-fillers
 
 # Allow non-ASCII characters
-uv run transcribe --allow-non-ascii
+./transcriber-rs/target/release/transcriber --allow-non-ascii
 
 # Don't save transcriptions to conversations/ (privacy mode)
-uv run transcribe --no-log
+./transcriber-rs/target/release/transcriber --no-log
 ```
 
 To see all options:
 ```bash
-uv run transcribe --help
+./transcriber-rs/target/release/transcriber --help
 ```
 
 ### What happens when you run it:
@@ -154,13 +147,13 @@ uv run transcribe --help
 3. Transcribes speech in real-time
 4. Types the transcription into whatever window/app is active
 5. Displays transcriptions in the terminal (with [PARTIAL] and [FINAL] markers)
-6. Saves all final transcriptions to `conversations/transcription_YYYYMMDD_HHMMSS.txt`
+6. Saves all events to `conversations/debug_events_YYYYMMDD_HHMMSS.jsonl`
 
 **The session will run indefinitely** - it won't timeout during periods of silence. The WebSocket connection sends keepalive pings every 20 seconds to maintain the connection, so you can leave it running as long as you need.
 
 ### Stopping the transcription:
 
-Press `Ctrl+C` to gracefully stop the session. The location of your saved transcription will be displayed.
+Press `Ctrl+C` to gracefully stop the session.
 
 ## Toggle Keybinding (Recommended)
 
@@ -235,25 +228,22 @@ The tool detects your display server and uses the best available method:
 - **wtype** on Wayland (fallback) - Direct keystroke simulation if wl-copy is unavailable.
 - **xdotool** on X11
 
+Per-window typing behavior can be customized in `typer_rules.yaml`.
+
 If typing fails, transcriptions are still saved to the log files.
 
 ### File Logging
 
-Every transcription session creates a new timestamped file in the `conversations/` directory:
+Every transcription session creates a new timestamped JSONL file in the `conversations/` directory:
 
 ```
 conversations/
-├── transcription_20250315_143022.txt
-├── transcription_20250315_150534.txt
+├── debug_events_20250315_143022.jsonl
+├── debug_events_20250315_150534.jsonl
 └── ...
 ```
 
-Each file contains timestamped entries:
-
-```
-[2025-03-15 14:30:22] Hello, this is my first transcription.
-[2025-03-15 14:30:35] This is another segment of speech.
-```
+Each file contains structured JSON events including transcriptions, metrics, and debug information.
 
 ### Terminal Display
 
@@ -265,7 +255,7 @@ Two types of output:
 
 If keyboard typing fails (permissions, focus issues, etc.):
 - Error is logged to terminal
-- Transcription is still saved to file
+- Transcription is still saved to the JSONL log
 - Session continues running
 - You can retrieve lost text from the conversation log
 
@@ -273,7 +263,7 @@ If keyboard typing fails (permissions, focus issues, etc.):
 
 ### Connection randomly drops or stops
 
-The transcriber now includes keepalive functionality to prevent timeouts during silence. If the connection still drops:
+The transcriber includes keepalive functionality to prevent timeouts during silence. If the connection still drops:
 
 1. **Check the terminal output** - it will show the close code and reason:
    - Code 1000: Normal closure (you or the server intentionally stopped)
@@ -282,19 +272,9 @@ The transcriber now includes keepalive functionality to prevent timeouts during 
 
 2. **Check your internet connection** - unstable network can cause drops
 
-3. **Check the logs** - Look at `.transcribe.log` (if using toggle script) or the terminal output for error messages
+3. **Check the logs** - Look at `.transcribe.log` (if using toggle script) or the JSONL files in `conversations/` for error details
 
 4. **API issues** - Rarely, OpenAI's API might have issues. Check their status page.
-
-If you see repeated disconnections, please note the close code and message - this helps diagnose the issue.
-
-### No audio input detected
-
-Check your default microphone:
-```bash
-# List audio devices
-uv run python -c "import pyaudio; pa = pyaudio.PyAudio(); [print(f'{i}: {pa.get_device_info_by_index(i)[\"name\"]}') for i in range(pa.get_device_count())]"
-```
 
 ### Keyboard typing not working
 
@@ -312,21 +292,15 @@ Some applications (like certain Electron apps) may block programmatic typing as 
 - Make sure you have access to the OpenAI Realtime API
 - Check your OpenAI account has sufficient credits
 
-### Import errors
+## Time Saved Analysis (Optional)
 
-If you see module import errors, sync the dependencies:
-```bash
-uv sync
-```
-
-## Time Saved Analysis
-
-The `scripts/time_saved.py` script generates a report showing how much time you've saved using voice transcription versus typing. It uses pre-computed ratios for speech-to-core-idea compression and compares your speaking speed to typing speed.
+The `scripts/time_saved.py` script generates a report showing how much time you've saved using voice transcription versus typing. Requires Python and [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv sync --extra analysis  # Install scipy/matplotlib
-uv run python scripts/time_saved.py
+uv run scripts/time_saved.py
 ```
+
+Dependencies (matplotlib) are installed automatically via inline script metadata.
 
 ## License
 

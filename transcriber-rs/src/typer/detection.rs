@@ -62,7 +62,7 @@ impl TyperRules {
     pub fn load(config_path: Option<&Path>) -> Self {
         let path = config_path
             .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("transcriber/typer_rules.yaml"));
+            .unwrap_or_else(|| PathBuf::from("typer_rules.yaml"));
 
         let mut rules = TyperRules {
             rules: Vec::new(),
