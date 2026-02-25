@@ -28,21 +28,6 @@ struct WindowCounts {
 }
 
 impl WindowCounts {
-    /// Timeout rate as a fraction (0.0–1.0). Returns 0.0 if no data.
-    fn timeout_rate(&self) -> f64 {
-        let total = self.realtime + self.timeouts;
-        if total > 0 {
-            self.timeouts as f64 / total as f64
-        } else {
-            0.0
-        }
-    }
-
-    /// Total transcription items (realtime + timeouts).
-    fn total_items(&self) -> u64 {
-        self.realtime + self.timeouts
-    }
-
     /// Format as a compact string: `rt:12 to:3 (80%) fb:1/4 filt:0`
     fn format(&self) -> String {
         let total = self.realtime + self.timeouts;
@@ -81,6 +66,27 @@ impl RecentWindow {
         while self.events.front().is_some_and(|(t, _)| *t < cutoff) {
             self.events.pop_front();
         }
+    }
+
+    /// Count outcomes from the last `n` events (most recent first).
+    fn last_n(&self, n: usize) -> WindowCounts {
+        let mut c = WindowCounts {
+            realtime: 0,
+            timeouts: 0,
+            fallback_ok: 0,
+            fallback_fail: 0,
+            filtered: 0,
+        };
+        for (_, outcome) in self.events.iter().rev().take(n) {
+            match outcome {
+                Outcome::Realtime => c.realtime += 1,
+                Outcome::Timeout => c.timeouts += 1,
+                Outcome::FallbackOk => c.fallback_ok += 1,
+                Outcome::FallbackFail => c.fallback_fail += 1,
+                Outcome::Filtered => c.filtered += 1,
+            }
+        }
+        c
     }
 
     /// Count outcomes within the last `window` duration.
@@ -129,6 +135,7 @@ struct Metrics {
     api_errors: u64,
     start_time: Instant,
     recent: RecentWindow,
+    last_health: &'static str,
 }
 
 impl Metrics {
@@ -151,6 +158,7 @@ impl Metrics {
             api_errors: 0,
             start_time: Instant::now(),
             recent: RecentWindow::new(),
+            last_health: "ok",
         }
     }
 
@@ -164,14 +172,17 @@ impl Metrics {
             MetricsEvent::RealtimeTranscription => {
                 self.realtime_transcriptions += 1;
                 self.recent.push(Outcome::Realtime);
+                self.update_health();
             }
             MetricsEvent::Timeout => {
                 self.timeouts += 1;
                 self.recent.push(Outcome::Timeout);
+                self.update_health();
             }
             MetricsEvent::FallbackSuccess => {
                 self.fallback_successes += 1;
                 self.recent.push(Outcome::FallbackOk);
+                self.update_health();
             }
             MetricsEvent::FallbackFailure { duration_ms } => {
                 if duration_ms >= 1000 {
@@ -235,25 +246,33 @@ impl Metrics {
         );
 
         info!("{stats}");
-
-        // Write health status file for the bar widget
-        let health = self.classify_health(&w5m);
-        write_health_file(health);
     }
 
-    /// Classify connection health from the 5-minute window.
-    fn classify_health(&self, w5m: &WindowCounts) -> &'static str {
-        // Not enough data to judge — treat as ok
-        if w5m.total_items() < 3 {
-            return "ok";
-        }
-        let rate = w5m.timeout_rate();
-        if rate > 0.5 {
-            "error"
-        } else if rate > 0.25 {
-            "degraded"
-        } else {
+    /// Reclassify health from recent events; write to disk only on state change.
+    ///
+    /// Uses last 8 events but only counts outcomes that reflect actual delivery:
+    /// Realtime + FallbackOk = success, FallbackFail = failure.
+    /// Timeouts where Realtime already delivered are not failures.
+    fn update_health(&mut self) {
+        let recent = self.recent.last_n(8);
+        let successes = recent.realtime + recent.fallback_ok;
+        let failures = recent.fallback_fail;
+        let total = successes + failures;
+        let health = if total < 3 {
             "ok"
+        } else {
+            let fail_rate = failures as f64 / total as f64;
+            if fail_rate > 0.5 {
+                "error"
+            } else if fail_rate > 0.25 {
+                "degraded"
+            } else {
+                "ok"
+            }
+        };
+        if health != self.last_health {
+            self.last_health = health;
+            write_health_file(health);
         }
     }
 }
@@ -280,6 +299,8 @@ pub async fn run_metrics_task(
     _debug_log_file: Option<PathBuf>,
 ) {
     let mut metrics = Metrics::new();
+    // Write initial health state so we don't inherit stale status from a previous run
+    write_health_file("ok");
     let mut log_interval = tokio::time::interval(Duration::from_secs(60));
     log_interval.tick().await; // Consume initial tick
 
