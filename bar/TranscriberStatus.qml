@@ -48,7 +48,7 @@ MaterialSymbol {
             if (root.connectionHealth === "degraded") {
                 return root.hovered ? "#7d6a3a" : "#65542e"  // Dusty amber
             }
-            return root.hovered ? "#3a6b4a" : "#2d5639"  // Dusty green
+            return root.hovered ? "#3d7a4f" : "#316340"  // Dusty green
         }
     }
 
