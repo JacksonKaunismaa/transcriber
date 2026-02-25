@@ -8,6 +8,9 @@ hallucinations:
   # Common false positives
   - pattern: '\bBye[\.!]?\s*'
   - pattern: '\bThank you\.\s*'
+  - pattern: 'Thank you for (?:joining|watching|listening|having|sharing|tuning in)\b.*?[\.!]\s*'
+    flags: ignorecase
+    comment: "Thank you for joining/watching/listening/etc hallucinations"
   - pattern: '\bMBC\b\.?\s*'
   - pattern: '\bAmen\b\.?\s*'
     flags: ignorecase
@@ -29,7 +32,7 @@ hallucinations:
     flags: ignorecase
   - pattern: '\bBoop\b[!\.]?\s*'
     flags: ignorecase
-  - pattern: '\b[Oo]m+\s*[Nn]om+(\s*[Nn]om+)*\b\.?\s*'
+  - pattern: '\b(?:[Oo]m+\s*[Nn]om+(?:[,\s]+[Nn]om+)*|[Nn]om+(?:[,\s]+[Nn]om+)+)\b\.?\s*'
   - pattern: '\bOink[!\.]?\s*(?:Oink[!\.]?\s*)*'
     flags: ignorecase
 
