@@ -109,6 +109,12 @@ hallucinations:
   - pattern: '\bVroom\b[,!\.]?\s*(?:\bvroom\b[,!\.]?\s*)*'
     flags: ignorecase
     comment: "Vroom, vroom, vroom."
+  - pattern: '\bBoom\b[,!\.]?\s*(?:\bboom\b[,!\.]?\s*)*'
+    flags: ignorecase
+    comment: "Boom, boom, boom."
+  - pattern: '\bTch\b\.?\s*'
+    flags: ignorecase
+    comment: "Tch. (tongue click hallucination)"
 
   # Exclamatory noise hallucinations
   - pattern: '\bBuh+\b\.?\s*'
@@ -121,7 +127,8 @@ hallucinations:
   - pattern: '\b[AaRr]+[Rr]{4,}\b\.?\s*'
     comment: "Arrrr, Rrrrrr, etc."
   - pattern: '\b([A-Za-z])\1{4,}\b\.?\s*'
-    comment: "5+ repeated chars"
+    flags: ignorecase
+    comment: "5+ repeated chars (ignorecase for mixed-case like Zzzzzzzzzz)"
   - pattern: '\b([a-zA-Z])\1{2,}(?:([a-zA-Z])\2{1,})+\b\.?\s*'
     flags: ignorecase
     comment: "Multi-group repeated-char gibberish (e.g., gggggghhh)"

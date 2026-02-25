@@ -230,7 +230,15 @@ fn filter_text(state: &TranscriptState, text: &str) -> String {
         }
     }
 
-    whitespace_pattern().replace_all(&result, " ").trim().to_string()
+    let result = whitespace_pattern().replace_all(&result, " ").trim().to_string();
+
+    // Post-filler safety: discard if only punctuation/whitespace remains
+    let meaningful = meaningful_pattern().replace_all(&result, "");
+    if meaningful.is_empty() {
+        return String::new();
+    }
+
+    result
 }
 
 /// Apply hallucination + non-ASCII filters with the 50% rule.
