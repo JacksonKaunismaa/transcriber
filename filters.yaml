@@ -48,6 +48,12 @@ hallucinations:
   - pattern: 'If you don''t have a phone.*see you next time\.?\s*'
     flags: ignorecase
 
+  - pattern: '(?:Like,?\s*)?(?:comment,?\s*)?(?:and\s+)?subscribe\b.*?[\.!]\s*'
+    flags: ignorecase
+    comment: "Like, subscribe, comment hallucinations"
+  - pattern: 'Like, subscribe,? and share\b.*?[\.!]+\s*'
+    flags: ignorecase
+    comment: "Like, subscribe, and share hallucinations"
   - pattern: 'Please leave a comment below[!\.]?\s*'
     flags: ignorecase
 
