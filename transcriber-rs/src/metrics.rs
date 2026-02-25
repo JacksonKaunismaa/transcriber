@@ -28,6 +28,21 @@ struct WindowCounts {
 }
 
 impl WindowCounts {
+    /// Timeout rate as a fraction (0.0–1.0). Returns 0.0 if no data.
+    fn timeout_rate(&self) -> f64 {
+        let total = self.realtime + self.timeouts;
+        if total > 0 {
+            self.timeouts as f64 / total as f64
+        } else {
+            0.0
+        }
+    }
+
+    /// Total transcription items (realtime + timeouts).
+    fn total_items(&self) -> u64 {
+        self.realtime + self.timeouts
+    }
+
     /// Format as a compact string: `rt:12 to:3 (80%) fb:1/4 filt:0`
     fn format(&self) -> String {
         let total = self.realtime + self.timeouts;
@@ -186,6 +201,7 @@ impl Metrics {
         self.recent.prune(Duration::from_secs(60 * 60));
 
         let w5m = self.recent.counts(Duration::from_secs(5 * 60));
+        let w15m = self.recent.counts(Duration::from_secs(15 * 60));
         let w1h = self.recent.counts(Duration::from_secs(60 * 60));
 
         // All-time counts reuse the cumulative counters
@@ -199,11 +215,12 @@ impl Metrics {
 
         let stats = format!(
             "METRICS [{minutes}m] | rss:{rss_mb:.0}MB | \
-             5m: {w5m} | 1h: {w1h} | all: {wall} | \
+             5m: {w5m} | 15m: {w15m} | 1h: {w1h} | all: {wall} | \
              races:{races} dupes:{dupes} short_skip:{ss} | \
              conn:{cs}/{ca} expires:{se} reconnects:{ra} | \
              errors: ws={we} api={ae}",
             w5m = w5m.format(),
+            w15m = w15m.format(),
             w1h = w1h.format(),
             wall = wall.format(),
             races = self.fallback_races,
@@ -218,6 +235,41 @@ impl Metrics {
         );
 
         info!("{stats}");
+
+        // Write health status file for the bar widget
+        let health = self.classify_health(&w5m);
+        write_health_file(health);
+    }
+
+    /// Classify connection health from the 5-minute window.
+    fn classify_health(&self, w5m: &WindowCounts) -> &'static str {
+        // Not enough data to judge — treat as ok
+        if w5m.total_items() < 3 {
+            return "ok";
+        }
+        let rate = w5m.timeout_rate();
+        if rate > 0.5 {
+            "error"
+        } else if rate > 0.25 {
+            "degraded"
+        } else {
+            "ok"
+        }
+    }
+}
+
+/// Get the health file path: $XDG_RUNTIME_DIR/transcriber_health (or /tmp fallback).
+fn health_file_path() -> PathBuf {
+    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
+    PathBuf::from(dir).join("transcriber_health")
+}
+
+/// Write health status atomically (write tmp + rename).
+fn write_health_file(health: &str) {
+    let path = health_file_path();
+    let tmp = path.with_extension("tmp");
+    if std::fs::write(&tmp, health).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
     }
 }
 
@@ -234,7 +286,8 @@ pub async fn run_metrics_task(
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
-                metrics.log_stats(); // Final stats
+                metrics.log_stats();
+                let _ = std::fs::remove_file(health_file_path());
                 break;
             }
             _ = log_interval.tick() => {
