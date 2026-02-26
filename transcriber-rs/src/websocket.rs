@@ -171,9 +171,16 @@ async fn do_connection(
         .await?;
     info!("Transcription session config sent (model: {model})");
 
-    // Ping keepalive
+    // Ping keepalive with pong timeout (matches Python: ping_interval=20, ping_timeout=10)
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(20));
     ping_interval.tick().await;
+    let mut last_ping: Option<std::time::Instant> = None;
+    let mut last_pong = std::time::Instant::now();
+    let ping_timeout = std::time::Duration::from_secs(10);
+
+    // Check pong timeout every 5s (more frequently than ping_timeout to catch it promptly)
+    let mut pong_check = tokio::time::interval(std::time::Duration::from_secs(5));
+    pong_check.tick().await;
 
     let mut result = ConnectionResult::Reconnect;
 
@@ -190,6 +197,16 @@ async fn do_connection(
                 if let Err(e) = ws_write.send(Message::Ping(vec![].into())).await {
                     warn!("Ping failed: {e}");
                     break;
+                }
+                last_ping = Some(std::time::Instant::now());
+            }
+
+            _ = pong_check.tick() => {
+                if let Some(ping_time) = last_ping {
+                    if ping_time.elapsed() > ping_timeout && last_pong < ping_time {
+                        warn!("Pong timeout (no pong within {}s of last ping)", ping_timeout.as_secs());
+                        break;
+                    }
                 }
             }
 
@@ -256,7 +273,9 @@ async fn do_connection(
                             }
                         }
                     }
-                    Some(Ok(Message::Pong(_))) => {}
+                    Some(Ok(Message::Pong(_))) => {
+                        last_pong = std::time::Instant::now();
+                    }
                     Some(Ok(Message::Close(frame))) => {
                         let code = frame.as_ref().map(|f| f.code);
                         info!("WebSocket closed: {code:?}");
