@@ -146,6 +146,8 @@ async fn do_connection(
     metrics_tx.send(MetricsEvent::ConnectionSuccess).await.ok();
     // Notify audio_buffer that API timestamps reset with the new session
     audio_event_tx.send(AudioEvent::SessionReset).await.ok();
+    // Notify transcript task to clear ordering/completion state
+    transcript_tx.send(TranscriptEvent::SessionReset).await.ok();
     println!(
         "[INFO] WebSocket connection established (transcription mode, model: {model})"
     );

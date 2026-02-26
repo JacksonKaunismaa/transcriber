@@ -150,6 +150,16 @@ async fn handle_event(state: &mut TranscriptState, event: TranscriptEvent) {
                 log_transcript(&filtered, true);
             }
         }
+
+        TranscriptEvent::SessionReset => {
+            state.item_order.clear();
+            state.completed_transcripts.clear();
+            state.completed_items.clear();
+            state.next_output_index = 0;
+            state.transcript_buffer.clear();
+            state.recent_transcripts.clear();
+            info!("Transcript state reset for new session");
+        }
     }
 }
 

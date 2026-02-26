@@ -55,6 +55,8 @@ pub enum TranscriptEvent {
         item_id: String,
         transcript: String,
     },
+    /// New WebSocket session — clear ordering/completion state
+    SessionReset,
 }
 
 /// Commands from Transcript Manager → Typer task.
