@@ -140,7 +140,12 @@ async fn do_connection(
         )
         .body(())?;
 
-    let (ws_stream, _response) = tokio_tungstenite::connect_async(request).await?;
+    let (ws_stream, _response) = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio_tungstenite::connect_async(request),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("WebSocket connection timed out after 10s"))??;
     let (mut ws_write, mut ws_read) = ws_stream.split();
 
     metrics_tx.send(MetricsEvent::ConnectionSuccess).await.ok();
