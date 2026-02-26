@@ -50,6 +50,7 @@ MaterialSymbol {
             }
             return root.hovered ? "#3d7a4f" : "#316340"  // Dusty green
         }
+        opacity: root.micMuted && root.serviceActive ? 0.62 : 1.0
     }
 
     // Click area to toggle the service
