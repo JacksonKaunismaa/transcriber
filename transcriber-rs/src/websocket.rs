@@ -70,8 +70,10 @@ const WS_URL: &str = "wss://api.openai.com/v1/realtime?intent=transcription";
 
 /// Result of a single WebSocket connection attempt.
 pub enum ConnectionResult {
-    /// Connection ended, should reconnect
+    /// Connection was established then lost — reconnect (reset backoff)
     Reconnect,
+    /// Connection failed to establish — reconnect (backoff=true for server errors)
+    ConnectFailed { backoff: bool },
     /// Connection ended normally, do not reconnect
     Done,
 }
@@ -108,9 +110,21 @@ pub async fn run_connection(
     {
         Ok(result) => result,
         Err(e) => {
-            error!("WebSocket error: {e}");
+            let err_str = e.to_string();
+            error!("WebSocket error: {err_str}");
             metrics_tx.send(MetricsEvent::WebSocketError).await.ok();
-            ConnectionResult::Reconnect
+            // Local failures (DNS, timeout, refused) → retry fast
+            // Server failures (rate limit, 4xx, 5xx) → backoff
+            let is_local = err_str.contains("name resolution")
+                || err_str.contains("timed out")
+                || err_str.contains("Connection refused")
+                || err_str.contains("No route to host")
+                || err_str.contains("Network is unreachable");
+            if is_local {
+                ConnectionResult::ConnectFailed { backoff: false }
+            } else {
+                ConnectionResult::ConnectFailed { backoff: true }
+            }
         }
     }
 }
@@ -147,6 +161,15 @@ async fn do_connection(
     .await
     .map_err(|_| anyhow::anyhow!("WebSocket connection timed out after 10s"))??;
     let (mut ws_write, mut ws_read) = ws_stream.split();
+
+    // Drain stale audio commands from previous connection
+    let mut drained = 0;
+    while ws_cmd_rx.try_recv().is_ok() {
+        drained += 1;
+    }
+    if drained > 0 {
+        info!("Drained {drained} stale audio commands from previous connection");
+    }
 
     metrics_tx.send(MetricsEvent::ConnectionSuccess).await.ok();
     // Notify audio_buffer that API timestamps reset with the new session
@@ -254,9 +277,11 @@ async fn do_connection(
                         match event_result {
                             EventAction::Continue => {}
                             EventAction::SessionCreated => {
+                                info!("Session created");
                                 println!("[INFO] Session created successfully");
                             }
                             EventAction::SessionUpdated => {
+                                info!("Session configured — ready for transcription");
                                 println!("[INFO] Session configuration updated");
                                 println!("[INFO] Fallback transcription enabled (2.5s timeout)");
                                 println!("[INFO] Speak into your microphone. Transcription will be typed and logged.");

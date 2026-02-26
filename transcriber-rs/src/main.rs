@@ -115,18 +115,17 @@ async fn main() -> anyhow::Result<()> {
     // Unlike spawned tasks, the WebSocket connection runs inline here.
     // ws_cmd_rx is passed by &mut so it survives across reconnections.
 
-    let mut reconnect_attempts: u32 = 0;
-    let max_reconnect_attempts: u32 = 10;
+    let mut consecutive_failures: u32 = 0;
 
     loop {
         if root_token.is_cancelled() {
             break;
         }
 
-        if reconnect_attempts == 0 {
+        if consecutive_failures == 0 {
             println!("[INFO] Connecting to OpenAI...");
         } else {
-            println!("[INFO] Reconnecting to OpenAI (attempt {reconnect_attempts})...");
+            println!("[INFO] Reconnecting to OpenAI (attempt {consecutive_failures})...");
         }
 
         metrics_tx.send(MetricsEvent::ConnectionAttempt).await.ok();
@@ -145,29 +144,37 @@ async fn main() -> anyhow::Result<()> {
         match result {
             websocket::ConnectionResult::Done => break,
             websocket::ConnectionResult::Reconnect => {
+                // Was connected then lost — reset backoff, reconnect quickly
                 if root_token.is_cancelled() {
                     break;
                 }
-
-                reconnect_attempts += 1;
-                if reconnect_attempts > max_reconnect_attempts {
-                    error!("Max reconnection attempts ({max_reconnect_attempts}) exceeded");
-                    break;
-                }
-
-                let delay = 1.0_f64 * 2.0_f64.powi(reconnect_attempts as i32 - 1);
-                let delay = delay.min(30.0);
-                println!("[INFO] Reconnecting in {delay:.1}s...");
-                tokio::time::sleep(std::time::Duration::from_secs_f64(delay)).await;
-
+                consecutive_failures = 0;
+                println!("[INFO] Connection lost, reconnecting in 1s...");
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 metrics_tx
                     .send(MetricsEvent::ReconnectionAttempt)
                     .await
                     .ok();
-
-                // Reset attempts on successful reconnect (done inside the WS task
-                // when it prints "connected" — but we track here too)
-                reconnect_attempts = 0;
+            }
+            websocket::ConnectionResult::ConnectFailed { backoff } => {
+                if root_token.is_cancelled() {
+                    break;
+                }
+                consecutive_failures += 1;
+                let delay = if backoff {
+                    // Server error (rate limit, 4xx, 5xx) — exponential backoff
+                    let d = 2.0_f64 * 2.0_f64.powi(consecutive_failures.min(4) as i32 - 1);
+                    d.min(30.0)
+                } else {
+                    // Local error (DNS, timeout, no route) — fast retry
+                    1.0
+                };
+                println!("[INFO] Connection failed, retrying in {delay:.1}s...");
+                tokio::time::sleep(std::time::Duration::from_secs_f64(delay)).await;
+                metrics_tx
+                    .send(MetricsEvent::ReconnectionAttempt)
+                    .await
+                    .ok();
             }
         }
     }
