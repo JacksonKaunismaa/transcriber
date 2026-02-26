@@ -136,6 +136,7 @@ struct Metrics {
     start_time: Instant,
     recent: RecentWindow,
     last_health: &'static str,
+    connected: bool,
 }
 
 impl Metrics {
@@ -159,15 +160,24 @@ impl Metrics {
             start_time: Instant::now(),
             recent: RecentWindow::new(),
             last_health: "ok",
+            connected: false,
         }
     }
 
     fn apply(&mut self, event: MetricsEvent) {
         match event {
             MetricsEvent::ConnectionAttempt => self.connection_attempts += 1,
-            MetricsEvent::ConnectionSuccess => self.connection_successes += 1,
+            MetricsEvent::ConnectionSuccess => {
+                self.connection_successes += 1;
+                self.connected = true;
+                self.update_health();
+            }
             MetricsEvent::SessionExpiration => self.session_expirations += 1,
-            MetricsEvent::ReconnectionAttempt => self.reconnection_attempts += 1,
+            MetricsEvent::ReconnectionAttempt => {
+                self.reconnection_attempts += 1;
+                self.connected = false;
+                self.update_health();
+            }
             MetricsEvent::AudioChunkSent => {} // not tracked
             MetricsEvent::RealtimeTranscription => {
                 self.realtime_transcriptions += 1;
@@ -199,7 +209,11 @@ impl Metrics {
                 self.content_filtered += 1;
                 self.recent.push(Outcome::Filtered);
             }
-            MetricsEvent::WebSocketError => self.websocket_errors += 1,
+            MetricsEvent::WebSocketError => {
+                self.websocket_errors += 1;
+                self.connected = false;
+                self.update_health();
+            }
             MetricsEvent::ApiError => self.api_errors += 1,
         }
     }
@@ -254,20 +268,24 @@ impl Metrics {
     /// Realtime + FallbackOk = success, FallbackFail = failure.
     /// Timeouts where Realtime already delivered are not failures.
     fn update_health(&mut self) {
-        let recent = self.recent.last_n(8);
-        let successes = recent.realtime + recent.fallback_ok;
-        let failures = recent.fallback_fail;
-        let total = successes + failures;
-        let health = if total < 3 {
-            "ok"
+        let health = if !self.connected {
+            "error"
         } else {
-            let fail_rate = failures as f64 / total as f64;
-            if fail_rate > 0.5 {
-                "error"
-            } else if fail_rate > 0.25 {
-                "degraded"
-            } else {
+            let recent = self.recent.last_n(8);
+            let successes = recent.realtime + recent.fallback_ok;
+            let failures = recent.fallback_fail;
+            let total = successes + failures;
+            if total < 3 {
                 "ok"
+            } else {
+                let fail_rate = failures as f64 / total as f64;
+                if fail_rate > 0.5 {
+                    "error"
+                } else if fail_rate > 0.25 {
+                    "degraded"
+                } else {
+                    "ok"
+                }
             }
         };
         if health != self.last_health {
