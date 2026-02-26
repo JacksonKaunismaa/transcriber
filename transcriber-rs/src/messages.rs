@@ -31,6 +31,12 @@ pub enum AudioEvent {
         item_id: String,
         audio_end_ms: u64,
     },
+    /// Realtime API delivered transcription — cancel pending fallback
+    ItemCompleted {
+        item_id: String,
+    },
+    /// New WebSocket session — API timestamps reset to 0
+    SessionReset,
 }
 
 /// Events from WebSocket / Audio Router → Transcript Manager.

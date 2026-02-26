@@ -201,6 +201,7 @@ impl Metrics {
                     self.fallback_failures_short += 1;
                 }
                 self.recent.push(Outcome::FallbackFail);
+                self.update_health();
             }
             MetricsEvent::FallbackRace => self.fallback_races += 1,
             MetricsEvent::ShortSegmentSkipped => self.short_segments_skipped += 1,

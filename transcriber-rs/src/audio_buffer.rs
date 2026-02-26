@@ -96,6 +96,16 @@ pub async fn run_audio_router_task(
                             timing.stopped_at = Some(std::time::Instant::now());
                         }
                     }
+                    Some(AudioEvent::ItemCompleted { item_id }) => {
+                        if let Some(timing) = speech_times.get_mut(&item_id) {
+                            timing.completed = true;
+                        }
+                    }
+                    Some(AudioEvent::SessionReset) => {
+                        audio_buffer.clear();
+                        speech_times.clear();
+                        debug!("Session reset: cleared audio buffer and speech times");
+                    }
                     None => break,
                 }
             }

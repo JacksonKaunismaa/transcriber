@@ -144,6 +144,8 @@ async fn do_connection(
     let (mut ws_write, mut ws_read) = ws_stream.split();
 
     metrics_tx.send(MetricsEvent::ConnectionSuccess).await.ok();
+    // Notify audio_buffer that API timestamps reset with the new session
+    audio_event_tx.send(AudioEvent::SessionReset).await.ok();
     println!(
         "[INFO] WebSocket connection established (transcription mode, model: {model})"
     );
@@ -353,6 +355,13 @@ async fn handle_server_event(
                 if !transcript.is_empty() {
                     info!("Realtime transcription: {transcript}");
                     if let Some(item_id) = &event.item_id {
+                        // Cancel pending fallback timer in audio_buffer
+                        audio_event_tx
+                            .send(AudioEvent::ItemCompleted {
+                                item_id: item_id.clone(),
+                            })
+                            .await
+                            .ok();
                         transcript_tx
                             .send(TranscriptEvent::RealtimeCompleted {
                                 item_id: item_id.clone(),
