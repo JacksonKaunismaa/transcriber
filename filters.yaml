@@ -147,9 +147,16 @@ hallucinations:
     flags: ignorecase
     comment: "Stuttering hallucination (e.g., B-b-b-b-b-b)"
 
+  # Media title hallucinations
+  - pattern: 'RESIDENT EVIL \d+\.?\s*'
+    comment: "RESIDENT EVIL 3, etc."
+
   # Music/lyrics hallucinations
   - pattern: '♪.*'
     comment: "Music notes - usually hallucinated lyrics"
+  - pattern: 'mom\s+mom\s+mom.*I don''t know.*I don''t know.*'
+    flags: ignorecase
+    comment: "Song lyric hallucination (mom mom mom... I don't know)"
 
 # Filler words/sounds
 # Only applied when allow_fillers=False
