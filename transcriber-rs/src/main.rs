@@ -207,7 +207,24 @@ fn setup_tracing(debug_log_file: &Option<PathBuf>) {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     if let Some(path) = debug_log_file {
-        let file = std::fs::File::create(path).expect("Failed to create debug log file");
+        let file = {
+            #[cfg(unix)]
+            {
+                use std::fs::OpenOptions;
+                use std::os::unix::fs::OpenOptionsExt;
+                OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .open(path)
+                    .expect("Failed to create debug log file")
+            }
+            #[cfg(not(unix))]
+            {
+                std::fs::File::create(path).expect("Failed to create debug log file")
+            }
+        };
         let file_layer = fmt::layer()
             .json()
             .with_writer(std::sync::Mutex::new(file))
