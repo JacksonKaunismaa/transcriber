@@ -24,7 +24,7 @@ serde_yaml = "0.9"
 
 # Regex (fancy-regex supports backreferences needed by filter patterns)
 regex = "1"
-fancy-regex = "0.14"
+fancy-regex = "0.17"
 
 # Fuzzy string matching (gestalt / Ratcliff-Obershelp)
 strsim = "0.11"
