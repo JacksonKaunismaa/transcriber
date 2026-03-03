@@ -107,6 +107,8 @@ hallucinations:
   # Subtitle watermarks
   - pattern: 'Altyaz.*M\.?\s*K\.?\s*'
     flags: ignorecase
+  - pattern: 'Subs by www\.zeoranger\.co\.uk\.?\s*'
+    flags: ignorecase
 
   # Foreign language hallucinations
   - pattern: 'Belki de sadece\.{0,3}\s*'
