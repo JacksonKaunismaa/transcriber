@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -161,6 +163,7 @@ async fn do_connection(
     .await
     .map_err(|_| anyhow::anyhow!("WebSocket connection timed out after 10s"))??;
     let (mut ws_write, mut ws_read) = ws_stream.split();
+    let mut item_created_at: HashMap<String, std::time::Instant> = HashMap::new();
 
     // Drain stale audio commands from previous connection
     let mut drained = 0;
@@ -176,6 +179,7 @@ async fn do_connection(
     audio_event_tx.send(AudioEvent::SessionReset).await.ok();
     // Notify transcript task to clear ordering/completion state
     transcript_tx.send(TranscriptEvent::SessionReset).await.ok();
+    item_created_at.clear();
     println!(
         "[INFO] WebSocket connection established (transcription mode, model: {model})"
     );
@@ -272,6 +276,7 @@ async fn do_connection(
                             audio_event_tx,
                             transcript_tx,
                             metrics_tx,
+                            &mut item_created_at,
                         ).await;
 
                         match event_result {
@@ -300,6 +305,11 @@ async fn do_connection(
                     }
                     Some(Ok(Message::Pong(_))) => {
                         last_pong = std::time::Instant::now();
+                        if let Some(ping_time) = last_ping {
+                            let rtt_ms = ping_time.elapsed().as_millis() as u64;
+                            info!("Ping RTT: {rtt_ms}ms");
+                            metrics_tx.send(MetricsEvent::PingRtt { millis: rtt_ms }).await.ok();
+                        }
                     }
                     Some(Ok(Message::Close(frame))) => {
                         let code = frame.as_ref().map(|f| f.code);
@@ -341,6 +351,7 @@ async fn handle_server_event(
     audio_event_tx: &mpsc::Sender<AudioEvent>,
     transcript_tx: &mpsc::Sender<TranscriptEvent>,
     metrics_tx: &mpsc::Sender<MetricsEvent>,
+    item_created_at: &mut HashMap<String, std::time::Instant>,
 ) -> EventAction {
     let event: ServerEvent = match serde_json::from_str(text) {
         Ok(e) => e,
@@ -359,6 +370,7 @@ async fn handle_server_event(
         "conversation.item.created" => {
             if let Some(item) = &event.item {
                 if let Some(id) = &item.id {
+                    item_created_at.insert(id.clone(), std::time::Instant::now());
                     transcript_tx
                         .send(TranscriptEvent::ItemCreated {
                             item_id: id.clone(),
@@ -406,6 +418,14 @@ async fn handle_server_event(
                 if !transcript.is_empty() {
                     info!("Realtime transcription: {transcript}");
                     if let Some(item_id) = &event.item_id {
+                        if let Some(created) = item_created_at.remove(item_id) {
+                            let rtt_ms = created.elapsed().as_millis() as u64;
+                            info!("Transcription RTT: {rtt_ms}ms for {item_id}");
+                            metrics_tx.send(MetricsEvent::TranscriptionRtt {
+                                item_id: item_id.clone(),
+                                millis: rtt_ms,
+                            }).await.ok();
+                        }
                         // Cancel pending fallback timer in audio_buffer
                         audio_event_tx
                             .send(AudioEvent::ItemCompleted {

@@ -216,6 +216,9 @@ impl Metrics {
                 self.update_health();
             }
             MetricsEvent::ApiError => self.api_errors += 1,
+            MetricsEvent::PingRtt { .. } | MetricsEvent::TranscriptionRtt { .. } => {
+                // TODO: Task 3 will store RTTs and compute percentiles
+            }
         }
     }
 
