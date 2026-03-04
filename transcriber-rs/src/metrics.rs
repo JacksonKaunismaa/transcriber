@@ -137,6 +137,8 @@ struct Metrics {
     recent: RecentWindow,
     last_health: &'static str,
     connected: bool,
+    ping_rtts: VecDeque<u64>,
+    transcription_rtts: VecDeque<u64>,
 }
 
 impl Metrics {
@@ -161,6 +163,8 @@ impl Metrics {
             recent: RecentWindow::new(),
             last_health: "ok",
             connected: false,
+            ping_rtts: VecDeque::new(),
+            transcription_rtts: VecDeque::new(),
         }
     }
 
@@ -216,8 +220,18 @@ impl Metrics {
                 self.update_health();
             }
             MetricsEvent::ApiError => self.api_errors += 1,
-            MetricsEvent::PingRtt { .. } | MetricsEvent::TranscriptionRtt { .. } => {
-                // TODO: Task 3 will store RTTs and compute percentiles
+            MetricsEvent::PingRtt { millis } => {
+                self.ping_rtts.push_back(millis);
+                if self.ping_rtts.len() > 100 {
+                    self.ping_rtts.pop_front();
+                }
+            }
+            MetricsEvent::TranscriptionRtt { millis, .. } => {
+                self.transcription_rtts.push_back(millis);
+                if self.transcription_rtts.len() > 100 {
+                    self.transcription_rtts.pop_front();
+                }
+                self.update_health();
             }
         }
     }
@@ -225,6 +239,12 @@ impl Metrics {
     fn log_stats(&mut self) {
         let minutes = self.start_time.elapsed().as_secs() / 60;
         let rss_mb = get_rss_mb();
+        let ping_stats = percentiles(&self.ping_rtts)
+            .map(|(p50, p95)| format!("ping p50:{p50}ms p95:{p95}ms"))
+            .unwrap_or_else(|| "ping -".to_string());
+        let rtt_stats = percentiles(&self.transcription_rtts)
+            .map(|(p50, p95)| format!("rtt p50:{p50}ms p95:{p95}ms"))
+            .unwrap_or_else(|| "rtt -".to_string());
 
         // Prune entries older than 1 hour
         self.recent.prune(Duration::from_secs(60 * 60));
@@ -243,7 +263,7 @@ impl Metrics {
         };
 
         let stats = format!(
-            "METRICS [{minutes}m] | rss:{rss_mb:.0}MB | \
+            "METRICS [{minutes}m] | rss:{rss_mb:.0}MB | {ping_stats} | {rtt_stats} | \
              5m: {w5m} | 15m: {w15m} | 1h: {w1h} | all: {wall} | \
              races:{races} dupes:{dupes} short_skip:{ss} | \
              conn:{cs}/{ca} expires:{se} reconnects:{ra} | \
@@ -266,11 +286,6 @@ impl Metrics {
         info!("{stats}");
     }
 
-    /// Reclassify health from recent events; write to disk only on state change.
-    ///
-    /// Uses last 8 events but only counts outcomes that reflect actual delivery:
-    /// Realtime + FallbackOk = success, FallbackFail = failure.
-    /// Timeouts where Realtime already delivered are not failures.
     fn update_health(&mut self) {
         let health = if !self.connected {
             "error"
@@ -280,12 +295,16 @@ impl Metrics {
             let failures = recent.fallback_fail;
             let total = successes + failures;
             if total < 3 {
-                "ok"
+                if self.is_latency_degraded() {
+                    "degraded"
+                } else {
+                    "ok"
+                }
             } else {
                 let fail_rate = failures as f64 / total as f64;
                 if fail_rate > 0.5 {
                     "error"
-                } else if fail_rate > 0.25 {
+                } else if fail_rate > 0.25 || self.is_latency_degraded() {
                     "degraded"
                 } else {
                     "ok"
@@ -296,6 +315,20 @@ impl Metrics {
             self.last_health = health;
             write_health_file(health);
         }
+    }
+
+    /// Check if recent transcription latency indicates degradation.
+    /// Uses the last 8 RTT values (matching the event window size).
+    fn is_latency_degraded(&self) -> bool {
+        let recent: Vec<u64> = self.transcription_rtts.iter().rev().take(8).copied().collect();
+        if recent.len() < 3 {
+            return false;
+        }
+        let mut sorted = recent.clone();
+        sorted.sort_unstable();
+        let p50 = sorted[sorted.len() / 2];
+        let p95 = sorted[(sorted.len() * 95 / 100).min(sorted.len() - 1)];
+        p50 > 2000 || p95 > 3000
     }
 }
 
@@ -344,6 +377,19 @@ pub async fn run_metrics_task(
             }
         }
     }
+}
+
+/// Compute p50 and p95 from a deque of values. Returns (p50, p95) or None if empty.
+fn percentiles(values: &VecDeque<u64>) -> Option<(u64, u64)> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut sorted: Vec<u64> = values.iter().copied().collect();
+    sorted.sort_unstable();
+    let len = sorted.len();
+    let p50 = sorted[len / 2];
+    let p95 = sorted[(len * 95 / 100).min(len - 1)];
+    Some((p50, p95))
 }
 
 /// Read RSS from /proc/self/status (Linux only).
