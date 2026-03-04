@@ -82,5 +82,7 @@ pub enum MetricsEvent {
     ContentFiltered,
     WebSocketError,
     ApiError,
+    PingRtt { millis: u64 },
+    TranscriptionRtt { item_id: String, millis: u64 },
 }
 
