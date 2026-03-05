@@ -48,6 +48,9 @@ hallucinations:
     flags: ignorecase
   - pattern: 'If you don''t have a phone.*see you next time\.?\s*'
     flags: ignorecase
+  - pattern: 'I''m going to go ahead and end this video\.?\s*(?:I will see you in the next video\.?\s*)?'
+    flags: ignorecase
+    comment: "YouTube outro: ending this video / see you in the next video"
 
   - pattern: '(?:Like,?\s*)?(?:comment,?\s*)?(?:and\s+)?subscribe\b.*?[\.!]\s*'
     flags: ignorecase
