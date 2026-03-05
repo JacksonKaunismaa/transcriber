@@ -384,10 +384,12 @@ async fn handle_server_event(
 
         "input_audio_buffer.speech_started" => {
             if let Some(item_id) = &event.item_id {
+                let start_ms = event.audio_start_ms.unwrap_or(0);
+                info!("Speech started: item_id={item_id} audio_start_ms={start_ms}");
                 audio_event_tx
                     .send(AudioEvent::SpeechStarted {
                         item_id: item_id.clone(),
-                        audio_start_ms: event.audio_start_ms.unwrap_or(0),
+                        audio_start_ms: start_ms,
                     })
                     .await
                     .ok();
@@ -397,10 +399,12 @@ async fn handle_server_event(
 
         "input_audio_buffer.speech_stopped" => {
             if let Some(item_id) = &event.item_id {
+                let end_ms = event.audio_end_ms.unwrap_or(0);
+                info!("Speech stopped: item_id={item_id} audio_end_ms={end_ms}");
                 audio_event_tx
                     .send(AudioEvent::SpeechStopped {
                         item_id: item_id.clone(),
-                        audio_end_ms: event.audio_end_ms.unwrap_or(0),
+                        audio_end_ms: end_ms,
                     })
                     .await
                     .ok();
