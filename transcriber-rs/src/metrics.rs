@@ -225,6 +225,7 @@ impl Metrics {
                 if self.ping_rtts.len() > 100 {
                     self.ping_rtts.pop_front();
                 }
+                self.update_health();
             }
             MetricsEvent::TranscriptionRtt { millis, .. } => {
                 self.transcription_rtts.push_back(millis);
@@ -317,10 +318,16 @@ impl Metrics {
         }
     }
 
-    /// Check if recent transcription latency indicates degradation.
-    /// Uses the last 8 RTT values (matching the event window size).
+    /// Check if recent latency indicates degradation.
+    /// Uses transcription RTT (last 8) and ping RTT (last 8) independently.
+    /// Either one can trigger degradation.
     fn is_latency_degraded(&self) -> bool {
-        let recent: Vec<u64> = self.transcription_rtts.iter().rev().take(8).copied().collect();
+        self.is_rtt_degraded(&self.transcription_rtts, 2000, 3000)
+            || self.is_rtt_degraded(&self.ping_rtts, 500, 1000)
+    }
+
+    fn is_rtt_degraded(&self, rtts: &VecDeque<u64>, p50_limit: u64, p95_limit: u64) -> bool {
+        let recent: Vec<u64> = rtts.iter().rev().take(8).copied().collect();
         if recent.len() < 3 {
             return false;
         }
@@ -328,7 +335,7 @@ impl Metrics {
         sorted.sort_unstable();
         let p50 = sorted[sorted.len() / 2];
         let p95 = sorted[(sorted.len() * 95 / 100).min(sorted.len() - 1)];
-        p50 > 2000 || p95 > 3000
+        p50 > p50_limit || p95 > p95_limit
     }
 }
 
