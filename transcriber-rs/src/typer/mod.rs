@@ -16,7 +16,7 @@ pub async fn run_typer_task(
     mut rx: mpsc::Receiver<TypeCommand>,
     cancel: CancellationToken,
 ) {
-    let rules = TyperRules::load(None);
+    let mut rules = TyperRules::load(None);
 
     // Print initial status
     let status = if detection::test_adaptive() {
@@ -49,6 +49,7 @@ pub async fn run_typer_task(
                             continue;
                         }
 
+                        rules.reload();
                         let rules_clone = rules.clone();
                         let result = tokio::task::spawn_blocking(move || {
                             let window_class = detection::get_focused_window_class();

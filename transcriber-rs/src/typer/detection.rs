@@ -74,7 +74,7 @@ impl TyperRules {
         rules
     }
 
-    fn reload(&mut self) {
+    pub fn reload(&mut self) {
         let mtime = std::fs::metadata(&self.config_path)
             .ok()
             .and_then(|m| m.modified().ok());
@@ -95,8 +95,6 @@ impl TyperRules {
 
     /// Get the typing method for the given window class.
     pub fn get_method_for_window(&self, window_class: &str) -> String {
-        // NOTE: hot-reload is skipped here because this is called from spawn_blocking.
-        // The rules are reloaded when the TyperRules is cloned for each typing operation.
         let lower = window_class.to_lowercase();
         for rule in &self.rules {
             if lower.contains(&rule.match_str.to_lowercase()) {

@@ -157,7 +157,7 @@ async fn handle_event(state: &mut TranscriptState, event: TranscriptEvent) {
             state.completed_items.clear();
             state.next_output_index = 0;
             state.transcript_buffer.clear();
-            state.recent_transcripts.clear();
+            // Keep recent_transcripts to prevent duplicates across reconnections
             info!("Transcript state reset for new session");
         }
     }
@@ -189,6 +189,7 @@ async fn output_transcript(state: &mut TranscriptState, transcript: &str) {
     let filtered = filter_text(state, transcript);
 
     if !filtered.is_empty() && is_fuzzy_duplicate(state, &filtered) {
+        state.metrics_tx.send(MetricsEvent::DuplicateFiltered).await.ok();
         return;
     }
 
