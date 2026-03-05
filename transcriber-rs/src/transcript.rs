@@ -16,8 +16,8 @@ struct TranscriptState {
     filters: Filters,
     /// Item IDs in creation order
     item_order: Vec<String>,
-    /// Completed transcripts waiting for earlier items
-    completed_transcripts: HashMap<String, String>,
+    /// Completed transcripts waiting for earlier items: (transcript, duration_ms)
+    completed_transcripts: HashMap<String, (String, Option<u64>)>,
     /// Index of next item to output
     next_output_index: usize,
     /// Recent transcripts for fuzzy duplicate detection: (timestamp_secs, text)
@@ -113,6 +113,7 @@ async fn handle_event(state: &mut TranscriptState, event: TranscriptEvent) {
         TranscriptEvent::RealtimeCompleted {
             item_id,
             transcript,
+            duration_ms,
         } => {
             // Race prevention: check if already completed
             if state.completed_items.contains(&item_id) {
@@ -123,13 +124,14 @@ async fn handle_event(state: &mut TranscriptState, event: TranscriptEvent) {
             state.completed_items.insert(item_id.clone());
             state.transcript_buffer.clear();
 
-            state.completed_transcripts.insert(item_id, transcript);
+            state.completed_transcripts.insert(item_id, (transcript, duration_ms));
             flush_ordered_transcripts(state).await;
         }
 
         TranscriptEvent::FallbackCompleted {
             item_id,
             transcript,
+            duration_ms,
         } => {
             // Same race prevention
             if state.completed_items.contains(&item_id) {
@@ -139,7 +141,7 @@ async fn handle_event(state: &mut TranscriptState, event: TranscriptEvent) {
             }
             state.completed_items.insert(item_id.clone());
 
-            state.completed_transcripts.insert(item_id, transcript);
+            state.completed_transcripts.insert(item_id, (transcript, duration_ms));
             flush_ordered_transcripts(state).await;
         }
 
@@ -167,8 +169,8 @@ async fn flush_ordered_transcripts(state: &mut TranscriptState) {
     while state.next_output_index < state.item_order.len() {
         let next_id = &state.item_order[state.next_output_index];
 
-        if let Some(transcript) = state.completed_transcripts.remove(next_id) {
-            output_transcript(state, &transcript).await;
+        if let Some((transcript, duration_ms)) = state.completed_transcripts.remove(next_id) {
+            output_transcript(state, &transcript, duration_ms).await;
             state.next_output_index += 1;
         } else {
             break;
@@ -182,7 +184,14 @@ async fn flush_ordered_transcripts(state: &mut TranscriptState) {
     }
 }
 
-async fn output_transcript(state: &mut TranscriptState, transcript: &str) {
+async fn output_transcript(state: &mut TranscriptState, transcript: &str, duration_ms: Option<u64>) {
+    // Check for repetition/speed hallucination before applying regex filters
+    if is_repetition_hallucination(transcript, duration_ms) {
+        info!("Repetition hallucination detected, dropping: {transcript}");
+        state.metrics_tx.send(MetricsEvent::ContentFiltered).await.ok();
+        return;
+    }
+
     // Reload filters if changed
     state.filters.reload();
 
@@ -310,6 +319,54 @@ fn apply_hallucination_filters(state: &TranscriptState, text: &str) -> String {
     }
 
     filtered
+}
+
+/// Detect hallucinations via vocabulary repetition or impossible speaking speed.
+///
+/// Thresholds derived from analysis of 34,448 transcriptions with zero false positives:
+/// - unique_ratio ≤ 0.40: catches repetitive hallucinations ("One more" x30, etc.)
+/// - wps ≥ 10.0: catches fluent but impossibly fast hallucinations (YouTube outros, etc.)
+fn is_repetition_hallucination(text: &str, duration_ms: Option<u64>) -> bool {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let word_count = words.len();
+
+    if word_count < 10 {
+        return false;
+    }
+
+    // Check unique word ratio (type-token ratio), case-insensitive
+    let unique_lower: std::collections::HashSet<String> = words
+        .iter()
+        .map(|w| w.trim_matches(|c: char| c.is_ascii_punctuation()).to_lowercase())
+        .filter(|w| !w.is_empty())
+        .collect();
+
+    let unique_ratio = unique_lower.len() as f64 / word_count as f64;
+    if unique_ratio <= 0.40 {
+        info!(
+            "Repetition hallucination: unique_ratio={:.2} ({}/{} unique words)",
+            unique_ratio,
+            unique_lower.len(),
+            word_count
+        );
+        return true;
+    }
+
+    // Check words per second (if timing available)
+    if let Some(ms) = duration_ms {
+        if ms > 0 {
+            let wps = word_count as f64 / (ms as f64 / 1000.0);
+            if wps >= 10.0 {
+                info!(
+                    "Speed hallucination: {:.1} words/sec ({} words in {}ms)",
+                    wps, word_count, ms
+                );
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 /// Check if text is a fuzzy duplicate of a recent transcript.

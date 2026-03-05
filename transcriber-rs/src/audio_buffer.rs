@@ -141,6 +141,7 @@ pub async fn run_audio_router_task(
                         transcript_tx.send(TranscriptEvent::FallbackCompleted {
                             item_id,
                             transcript: String::new(),
+                            duration_ms: Some(duration_ms),
                         }).await.ok();
                         continue;
                     }
@@ -160,6 +161,7 @@ pub async fn run_audio_router_task(
                                     transcript_tx.send(TranscriptEvent::FallbackCompleted {
                                         item_id,
                                         transcript: text,
+                                        duration_ms: Some(duration_ms),
                                     }).await.ok();
                                 }
                                 None => {
@@ -167,6 +169,7 @@ pub async fn run_audio_router_task(
                                     transcript_tx.send(TranscriptEvent::FallbackCompleted {
                                         item_id,
                                         transcript: String::new(),
+                                        duration_ms: Some(duration_ms),
                                     }).await.ok();
                                 }
                             }
@@ -177,6 +180,7 @@ pub async fn run_audio_router_task(
                             transcript_tx.send(TranscriptEvent::FallbackCompleted {
                                 item_id,
                                 transcript: String::new(),
+                                duration_ms: Some(duration_ms),
                             }).await.ok();
                         }
                     }

@@ -164,6 +164,7 @@ async fn do_connection(
     .map_err(|_| anyhow::anyhow!("WebSocket connection timed out after 10s"))??;
     let (mut ws_write, mut ws_read) = ws_stream.split();
     let mut item_created_at: HashMap<String, std::time::Instant> = HashMap::new();
+    let mut speech_durations: HashMap<String, SpeechDuration> = HashMap::new();
 
     // Drain stale audio commands from previous connection
     let mut drained = 0;
@@ -180,6 +181,7 @@ async fn do_connection(
     // Notify transcript task to clear ordering/completion state
     transcript_tx.send(TranscriptEvent::SessionReset).await.ok();
     item_created_at.clear();
+    speech_durations.clear();
     println!(
         "[INFO] WebSocket connection established (transcription mode, model: {model})"
     );
@@ -277,6 +279,7 @@ async fn do_connection(
                             transcript_tx,
                             metrics_tx,
                             &mut item_created_at,
+                            &mut speech_durations,
                         ).await;
 
                         match event_result {
@@ -346,12 +349,28 @@ enum EventAction {
     Error { code: String, message: String },
 }
 
+/// Speech timing from VAD events, tracked per item_id.
+struct SpeechDuration {
+    start_ms: Option<u64>,
+    end_ms: Option<u64>,
+}
+
+impl SpeechDuration {
+    fn duration_ms(&self) -> Option<u64> {
+        match (self.start_ms, self.end_ms) {
+            (Some(s), Some(e)) if e > s => Some(e - s),
+            _ => None,
+        }
+    }
+}
+
 async fn handle_server_event(
     text: &str,
     audio_event_tx: &mpsc::Sender<AudioEvent>,
     transcript_tx: &mpsc::Sender<TranscriptEvent>,
     metrics_tx: &mpsc::Sender<MetricsEvent>,
     item_created_at: &mut HashMap<String, std::time::Instant>,
+    speech_durations: &mut HashMap<String, SpeechDuration>,
 ) -> EventAction {
     let event: ServerEvent = match serde_json::from_str(text) {
         Ok(e) => e,
@@ -386,6 +405,10 @@ async fn handle_server_event(
             if let Some(item_id) = &event.item_id {
                 let start_ms = event.audio_start_ms.unwrap_or(0);
                 info!("Speech started: item_id={item_id} audio_start_ms={start_ms}");
+                speech_durations.insert(item_id.clone(), SpeechDuration {
+                    start_ms: Some(start_ms),
+                    end_ms: None,
+                });
                 audio_event_tx
                     .send(AudioEvent::SpeechStarted {
                         item_id: item_id.clone(),
@@ -401,6 +424,9 @@ async fn handle_server_event(
             if let Some(item_id) = &event.item_id {
                 let end_ms = event.audio_end_ms.unwrap_or(0);
                 info!("Speech stopped: item_id={item_id} audio_end_ms={end_ms}");
+                if let Some(dur) = speech_durations.get_mut(item_id) {
+                    dur.end_ms = Some(end_ms);
+                }
                 audio_event_tx
                     .send(AudioEvent::SpeechStopped {
                         item_id: item_id.clone(),
@@ -437,10 +463,14 @@ async fn handle_server_event(
                             })
                             .await
                             .ok();
+                        let duration_ms = speech_durations
+                            .remove(item_id)
+                            .and_then(|d| d.duration_ms());
                         transcript_tx
                             .send(TranscriptEvent::RealtimeCompleted {
                                 item_id: item_id.clone(),
                                 transcript: transcript.clone(),
+                                duration_ms,
                             })
                             .await
                             .ok();

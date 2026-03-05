@@ -40,6 +40,7 @@ pub enum AudioEvent {
 }
 
 /// Events from WebSocket / Audio Router → Transcript Manager.
+#[derive(Debug)]
 pub enum TranscriptEvent {
     /// A new conversation item was created (for ordering)
     ItemCreated { item_id: String },
@@ -47,6 +48,8 @@ pub enum TranscriptEvent {
     RealtimeCompleted {
         item_id: String,
         transcript: String,
+        /// Speech duration in milliseconds (from VAD: audio_end_ms - audio_start_ms)
+        duration_ms: Option<u64>,
     },
     /// Partial transcription delta from the Realtime API
     RealtimeDelta { delta: String },
@@ -54,6 +57,8 @@ pub enum TranscriptEvent {
     FallbackCompleted {
         item_id: String,
         transcript: String,
+        /// Speech duration in milliseconds (from VAD: audio_end_ms - audio_start_ms)
+        duration_ms: Option<u64>,
     },
     /// New WebSocket session — clear ordering/completion state
     SessionReset,
