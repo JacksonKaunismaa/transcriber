@@ -114,7 +114,7 @@ The tool supports three transcription models. Use the `--model` or `-m` flag to 
 By default, the tool filters out common false positives to improve transcription quality:
 
 **Filtered by default:**
-- **Hallucinations** - "Bye.", "Thank you.", YouTube outro phrases, website URLs, subtitle watermarks
+- **Hallucinations** - "Bye.", "Thank you.", website URLs, subtitle watermarks, plus generic detection of repetitive text and impossibly fast speech
 - **Filler words** - um, uh, hmm, mhm, etc.
 - **Non-ASCII characters** - emojis, accented characters, CJK, etc.
 
