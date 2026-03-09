@@ -447,8 +447,6 @@ async fn handle_server_event(
             let transcript = event.transcript.clone().unwrap_or_default();
             if !transcript.is_empty() {
                 info!("Realtime transcription: {transcript}");
-            } else if let Some(item_id) = &event.item_id {
-                warn!("Empty transcript from API for {item_id}");
             }
             if let Some(item_id) = &event.item_id {
                 if let Some(created) = item_created_at.remove(item_id) {

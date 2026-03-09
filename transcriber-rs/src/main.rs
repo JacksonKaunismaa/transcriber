@@ -16,7 +16,7 @@ use chrono::Local;
 use clap::Parser;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::info;
 
 use config::Config;
 use messages::{AudioChunk, AudioEvent, MetricsEvent, TranscriptEvent, TypeCommand, WsCommand};

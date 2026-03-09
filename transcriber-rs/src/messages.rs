@@ -15,8 +15,6 @@ pub struct AudioChunk {
 pub enum WsCommand {
     /// Send base64-encoded audio to the Realtime API
     SendAudio { audio_b64: String },
-    /// Send the transcription_session.update config
-    SendSessionConfig { model: String },
 }
 
 /// Events from WebSocket task → Audio Router.
@@ -88,6 +86,6 @@ pub enum MetricsEvent {
     WebSocketError,
     ApiError,
     PingRtt { millis: u64 },
-    TranscriptionRtt { item_id: String, millis: u64 },
+    TranscriptionRtt { millis: u64 },
 }
 

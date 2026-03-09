@@ -119,7 +119,6 @@ async fn handle_event(state: &mut TranscriptState, event: TranscriptEvent) {
     match event {
         TranscriptEvent::ItemCreated { item_id } => {
             if !state.item_order.contains(&item_id) {
-                info!("Item queued: {item_id} (pos={})", state.item_order.len());
                 state.item_created_at.insert(item_id.clone(), std::time::Instant::now());
                 state.item_order.push(item_id);
             }
