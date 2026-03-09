@@ -163,7 +163,7 @@ async fn handle_event(state: &mut TranscriptState, event: TranscriptEvent) {
 
         TranscriptEvent::RealtimeDelta { delta } => {
             state.transcript_buffer.push_str(&delta);
-            let filtered = filter_text(state, &state.transcript_buffer.clone());
+            let filtered = filter_text(state, &state.transcript_buffer);
             if !filtered.is_empty() {
                 log_transcript(&filtered, true);
             }
@@ -224,7 +224,6 @@ async fn flush_ordered_transcripts(state: &mut TranscriptState) {
         for id in &trimmed {
             state.item_created_at.remove(id);
         }
-        drop(trimmed);
         state.next_output_index = 0;
     }
 }
@@ -449,7 +448,7 @@ fn log_transcript(text: &str, partial: bool) {
 
 
 fn find_filters_yaml() -> PathBuf {
-    // Look for filters.yaml relative to the binary, then in common locations
+    // Look for filters.yaml in CWD (expected to run from project root)
     let candidates = [
         PathBuf::from("filters.yaml"),
     ];

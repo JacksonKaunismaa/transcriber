@@ -358,7 +358,6 @@ fn write_health_file(health: &str) {
 pub async fn run_metrics_task(
     mut rx: mpsc::Receiver<MetricsEvent>,
     cancel: CancellationToken,
-    _debug_log_file: Option<PathBuf>,
 ) {
     let mut metrics = Metrics::new();
     // Write initial health state so we don't inherit stale status from a previous run

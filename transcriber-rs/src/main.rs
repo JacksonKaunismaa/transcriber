@@ -80,7 +80,6 @@ async fn main() -> anyhow::Result<()> {
     let metrics_handle = tokio::spawn(metrics::run_metrics_task(
         metrics_rx,
         root_token.child_token(),
-        debug_log_file.clone(),
     ));
 
     let typer_handle = tokio::spawn(typer::run_typer_task(

@@ -366,7 +366,7 @@ async fn handle_server_event(
     let event: ServerEvent = match serde_json::from_str(text) {
         Ok(e) => e,
         Err(e) => {
-            warn!("Failed to parse server event: {e}");
+            warn!("Failed to parse server event: {e}, raw: {text}");
             return EventAction::Continue;
         }
     };
