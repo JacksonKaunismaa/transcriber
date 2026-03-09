@@ -4,11 +4,14 @@ use std::path::PathBuf;
 use regex::Regex;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::config::Config;
 use crate::filters::Filters;
 use crate::messages::{MetricsEvent, TranscriptEvent, TypeCommand};
+
+/// How long to wait for an item to complete before skipping it
+const QUEUE_TIMEOUT_SECS: f64 = 10.0;
 
 /// State for the Transcript Manager task.
 struct TranscriptState {
@@ -26,6 +29,8 @@ struct TranscriptState {
     transcript_buffer: String,
     /// Set of completed item IDs (for race prevention)
     completed_items: std::collections::HashSet<String>,
+    /// When each item was added to item_order (for queue timeout)
+    item_created_at: HashMap<String, std::time::Instant>,
     /// Config flags
     allow_bye_thank_you: bool,
     allow_non_ascii: bool,
@@ -79,12 +84,16 @@ pub async fn run_transcript_task(
         recent_transcripts: Vec::new(),
         transcript_buffer: String::new(),
         completed_items: std::collections::HashSet::new(),
+        item_created_at: HashMap::new(),
         allow_bye_thank_you: config.allow_bye_thank_you,
         allow_non_ascii: config.allow_non_ascii,
         allow_fillers: config.allow_fillers,
         type_tx,
         metrics_tx,
     };
+
+    let mut queue_check = tokio::time::interval(std::time::Duration::from_secs(5));
+    queue_check.tick().await;
 
     loop {
         tokio::select! {
@@ -98,6 +107,10 @@ pub async fn run_transcript_task(
                     None => break, // Channel closed
                 }
             }
+            _ = queue_check.tick() => {
+                // Periodically check for timed-out items blocking the queue
+                flush_ordered_transcripts(&mut state).await;
+            }
         }
     }
 }
@@ -106,8 +119,12 @@ async fn handle_event(state: &mut TranscriptState, event: TranscriptEvent) {
     match event {
         TranscriptEvent::ItemCreated { item_id } => {
             if !state.item_order.contains(&item_id) {
+                info!("Item queued: {item_id} (pos={})", state.item_order.len());
+                state.item_created_at.insert(item_id.clone(), std::time::Instant::now());
                 state.item_order.push(item_id);
             }
+            // Flush in case a completion arrived before this creation event
+            flush_ordered_transcripts(state).await;
         }
 
         TranscriptEvent::RealtimeCompleted {
@@ -157,6 +174,7 @@ async fn handle_event(state: &mut TranscriptState, event: TranscriptEvent) {
             state.item_order.clear();
             state.completed_transcripts.clear();
             state.completed_items.clear();
+            state.item_created_at.clear();
             state.next_output_index = 0;
             state.transcript_buffer.clear();
             // Keep recent_transcripts to prevent duplicates across reconnections
@@ -170,16 +188,44 @@ async fn flush_ordered_transcripts(state: &mut TranscriptState) {
         let next_id = &state.item_order[state.next_output_index];
 
         if let Some((transcript, duration_ms)) = state.completed_transcripts.remove(next_id) {
+            state.item_created_at.remove(next_id);
             output_transcript(state, &transcript, duration_ms).await;
             state.next_output_index += 1;
         } else {
-            break;
+            // Safety: skip items that have been waiting too long (prevents permanent queue block)
+            let next_id_owned = next_id.to_string();
+            let should_skip = state.item_created_at
+                .get(&next_id_owned)
+                .map(|created| created.elapsed().as_secs_f64() >= QUEUE_TIMEOUT_SECS)
+                .unwrap_or(false);
+            if should_skip {
+                warn!("Queue timeout: skipping item {next_id_owned} (waited >{QUEUE_TIMEOUT_SECS}s for completion)");
+                state.item_created_at.remove(&next_id_owned);
+                state.next_output_index += 1;
+            } else {
+                // Log what we're blocked on (only once per item, at 3s)
+                let next_id_ref = &next_id_owned;
+                if let Some(created) = state.item_created_at.get(next_id_ref) {
+                    let wait_secs = created.elapsed().as_secs_f64();
+                    let pending = state.item_order.len() - state.next_output_index;
+                    if wait_secs >= 3.0 {
+                        warn!(
+                            "Queue blocked on {next_id_owned} (waiting {wait_secs:.1}s, {pending} items pending)"
+                        );
+                    }
+                }
+                break;
+            }
         }
     }
 
     // Trim to prevent unbounded growth
     if state.next_output_index > 100 {
-        state.item_order = state.item_order[state.next_output_index..].to_vec();
+        let trimmed: Vec<String> = state.item_order.drain(..state.next_output_index).collect();
+        for id in &trimmed {
+            state.item_created_at.remove(id);
+        }
+        drop(trimmed);
         state.next_output_index = 0;
     }
 }

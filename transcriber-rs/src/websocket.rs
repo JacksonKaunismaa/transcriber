@@ -310,7 +310,7 @@ async fn do_connection(
                         last_pong = std::time::Instant::now();
                         if let Some(ping_time) = last_ping {
                             let rtt_ms = ping_time.elapsed().as_millis() as u64;
-                            info!("Ping RTT: {rtt_ms}ms");
+                            debug!("Ping RTT: {rtt_ms}ms");
                             metrics_tx.send(MetricsEvent::PingRtt { millis: rtt_ms }).await.ok();
                         }
                     }
@@ -444,38 +444,39 @@ async fn handle_server_event(
                 .send(MetricsEvent::RealtimeTranscription)
                 .await
                 .ok();
-            if let Some(transcript) = &event.transcript {
-                if !transcript.is_empty() {
-                    info!("Realtime transcription: {transcript}");
-                    if let Some(item_id) = &event.item_id {
-                        if let Some(created) = item_created_at.remove(item_id) {
-                            let rtt_ms = created.elapsed().as_millis() as u64;
-                            info!("Transcription RTT: {rtt_ms}ms for {item_id}");
-                            metrics_tx.send(MetricsEvent::TranscriptionRtt {
-                                item_id: item_id.clone(),
-                                millis: rtt_ms,
-                            }).await.ok();
-                        }
-                        // Cancel pending fallback timer in audio_buffer
-                        audio_event_tx
-                            .send(AudioEvent::ItemCompleted {
-                                item_id: item_id.clone(),
-                            })
-                            .await
-                            .ok();
-                        let duration_ms = speech_durations
-                            .remove(item_id)
-                            .and_then(|d| d.duration_ms());
-                        transcript_tx
-                            .send(TranscriptEvent::RealtimeCompleted {
-                                item_id: item_id.clone(),
-                                transcript: transcript.clone(),
-                                duration_ms,
-                            })
-                            .await
-                            .ok();
-                    }
+            let transcript = event.transcript.clone().unwrap_or_default();
+            if !transcript.is_empty() {
+                info!("Realtime transcription: {transcript}");
+            } else if let Some(item_id) = &event.item_id {
+                warn!("Empty transcript from API for {item_id}");
+            }
+            if let Some(item_id) = &event.item_id {
+                if let Some(created) = item_created_at.remove(item_id) {
+                    let rtt_ms = created.elapsed().as_millis() as u64;
+                    info!("Transcription RTT: {rtt_ms}ms for {item_id}");
+                    metrics_tx.send(MetricsEvent::TranscriptionRtt {
+                        item_id: item_id.clone(),
+                        millis: rtt_ms,
+                    }).await.ok();
                 }
+                // Cancel pending fallback timer in audio_buffer
+                audio_event_tx
+                    .send(AudioEvent::ItemCompleted {
+                        item_id: item_id.clone(),
+                    })
+                    .await
+                    .ok();
+                let duration_ms = speech_durations
+                    .remove(item_id)
+                    .and_then(|d| d.duration_ms());
+                transcript_tx
+                    .send(TranscriptEvent::RealtimeCompleted {
+                        item_id: item_id.clone(),
+                        transcript,
+                        duration_ms,
+                    })
+                    .await
+                    .ok();
             }
             EventAction::Continue
         }

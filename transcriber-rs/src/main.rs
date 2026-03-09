@@ -200,6 +200,14 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+struct LocalTimer;
+
+impl tracing_subscriber::fmt::time::FormatTime for LocalTimer {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+        write!(w, "{}", chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f%:z"))
+    }
+}
+
 fn setup_tracing(debug_log_file: &Option<PathBuf>) {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
@@ -227,10 +235,12 @@ fn setup_tracing(debug_log_file: &Option<PathBuf>) {
         };
         let file_layer = fmt::layer()
             .json()
+            .with_timer(LocalTimer)
             .with_writer(std::sync::Mutex::new(file))
             .with_target(false);
 
         let stderr_layer = fmt::layer()
+            .with_timer(LocalTimer)
             .with_writer(std::io::stderr)
             .with_target(false)
             .with_level(true)
@@ -243,6 +253,7 @@ fn setup_tracing(debug_log_file: &Option<PathBuf>) {
             .init();
     } else {
         tracing_subscriber::fmt()
+            .with_timer(LocalTimer)
             .with_env_filter(env_filter)
             .with_writer(std::io::stderr)
             .init();
