@@ -32,7 +32,12 @@ def parse_speech_transcripts(conversations_dir: Path) -> list[dict]:
     entries = []
 
     # Parse JSONL debug logs (current format)
+    # Track which sessions have JSONL transcript data for dedup against .txt files.
+    # Only sessions where the JSONL actually contains "Transcript output:" entries
+    # count — old JSONL files (pre-Feb 2026) only had debug events, not transcripts.
+    jsonl_sessions_with_transcripts = set()
     for filepath in sorted(conversations_dir.glob("debug_events_*.jsonl")):
+        session_id = filepath.stem.removeprefix("debug_events_")
         for line in filepath.read_text().split('\n'):
             if not line.strip():
                 continue
@@ -47,26 +52,30 @@ def parse_speech_transcripts(conversations_dir: Path) -> list[dict]:
             ts_str = event.get("timestamp", "")
             if not ts_str:
                 continue
-            # Parse ISO 8601 UTC timestamp, convert to local naive time
-            # (matches legacy .txt format which used local time)
-            ts_utc = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-            ts = ts_utc.astimezone().replace(tzinfo=None)
+            # Timestamps are either naive (old: local time) or UTC with Z suffix.
+            # Normalize both to naive local time for consistency with .txt format.
+            if "Z" in ts_str or "+" in ts_str:
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                ts = ts.astimezone().replace(tzinfo=None)
+            else:
+                ts = datetime.fromisoformat(ts_str)
             entries.append({'timestamp': ts, 'text': text, 'chars': len(text)})
+            jsonl_sessions_with_transcripts.add(session_id)
 
     # Also parse legacy .txt files (historical data before JSONL migration)
-    # These use local time (naive), so we keep them naive for consistency
-    jsonl_timestamps = {e['timestamp'] for e in entries}
+    # These use local time (naive), so we keep them naive for consistency.
+    # Skip sessions where JSONL already provided transcript data.
     txt_pattern = r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] (.+)'
     for filepath in sorted(conversations_dir.glob("transcription_*.txt")):
+        session_ts = filepath.stem.removeprefix("transcription_")
+        if session_ts in jsonl_sessions_with_transcripts:
+            continue
         for line in filepath.read_text().split('\n'):
             match = re.match(txt_pattern, line)
             if match:
                 ts_str, text = match.groups()
                 ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-                # Skip if we already have JSONL data at this timestamp (avoid dupes
-                # from sessions that wrote both formats)
-                if ts not in jsonl_timestamps:
-                    entries.append({'timestamp': ts, 'text': text, 'chars': len(text)})
+                entries.append({'timestamp': ts, 'text': text, 'chars': len(text)})
 
     entries.sort(key=lambda e: e['timestamp'])
     return entries
