@@ -13,21 +13,19 @@ send_notification() {
     local message="$2"
     local icon="$3"
 
-    # Try notify-send
-    if command -v notify-send &> /dev/null; then
-        # Set DBUS_SESSION_BUS_ADDRESS if not set (for KDE keybindings)
-        if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
-            local uid=$(id -u)
-            local dbus_addr=$(find /run/user/$uid -name "bus" 2>/dev/null | head -1)
-            if [ -n "$dbus_addr" ]; then
-                export DBUS_SESSION_BUS_ADDRESS="unix:path=$dbus_addr"
-            fi
+    # Set DBUS_SESSION_BUS_ADDRESS if not set (for KDE keybindings)
+    if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
+        local uid=$(id -u)
+        local dbus_addr=$(find /run/user/$uid -name "bus" 2>/dev/null | head -1)
+        if [ -n "$dbus_addr" ]; then
+            export DBUS_SESSION_BUS_ADDRESS="unix:path=$dbus_addr"
         fi
-        notify-send "$title" "$message" --icon="$icon" 2>/dev/null
     fi
 
-    # Also try kdialog for KDE
-    if command -v kdialog &> /dev/null; then
+    # Try notify-send first, fall back to kdialog
+    if command -v notify-send &> /dev/null; then
+        notify-send "$title" "$message" --icon="$icon" 2>/dev/null
+    elif command -v kdialog &> /dev/null; then
         kdialog --passivepopup "$message" 3 --title "$title" 2>/dev/null &
     fi
 }
