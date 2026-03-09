@@ -252,15 +252,6 @@ async fn do_connection(
                             break;
                         }
                     }
-                    Some(WsCommand::SendSessionConfig { model }) => {
-                        let msg = serde_json::to_string(&SessionUpdate {
-                            r#type: "transcription_session.update",
-                            session: SessionConfig {
-                                input_audio_transcription: InputAudioTranscription { model },
-                            },
-                        })?;
-                        ws_write.send(Message::Text(msg.into())).await?;
-                    }
                     None => {
                         info!("Command channel closed");
                         result = ConnectionResult::Done;
@@ -453,7 +444,6 @@ async fn handle_server_event(
                     let rtt_ms = created.elapsed().as_millis() as u64;
                     info!("Transcription RTT: {rtt_ms}ms for {item_id}");
                     metrics_tx.send(MetricsEvent::TranscriptionRtt {
-                        item_id: item_id.clone(),
                         millis: rtt_ms,
                     }).await.ok();
                 }
