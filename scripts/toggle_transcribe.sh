@@ -8,6 +8,9 @@ PID_FILE="$SCRIPT_DIR/.transcribe.pid"
 LOG_FILE="$SCRIPT_DIR/.transcribe.log"
 
 # Function to send notifications
+# Uses --app-icon (not --icon) because --icon maps to the image-path D-Bus
+# hint, which Quickshell renders on top of a Material Symbol background.
+# --app-icon sets the app_icon D-Bus parameter, which renders cleanly.
 send_notification() {
     local title="$1"
     local message="$2"
@@ -22,9 +25,8 @@ send_notification() {
         fi
     fi
 
-    # Try notify-send first, fall back to kdialog
     if command -v notify-send &> /dev/null; then
-        notify-send "$title" "$message" --icon="$icon" 2>/dev/null
+        notify-send "$title" "$message" --app-icon="$icon" 2>/dev/null
     elif command -v kdialog &> /dev/null; then
         kdialog --passivepopup "$message" 3 --title "$title" 2>/dev/null &
     fi
