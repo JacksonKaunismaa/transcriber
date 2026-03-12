@@ -87,6 +87,11 @@ hallucinations:
   - pattern: '\bCheers\b\.?\s*'
     flags: ignorecase
 
+  # Name hallucinations
+  - pattern: '\bBARBARA MINKOVIC\b\.?\s*'
+    flags: ignorecase
+    comment: "Name hallucination from background noise"
+
   # Subtitle watermarks
   - pattern: 'Altyaz.*M\.?\s*K\.?\s*'
     flags: ignorecase
