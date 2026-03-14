@@ -9,9 +9,9 @@ hallucinations:
   - pattern: '\bBye[\.!]?\s*'
     flags: ignorecase
   - pattern: '\bThank you\.\s*'
-  - pattern: 'Thank you for (?:joining|watching|listening|having|sharing|tuning in)\b.*?[\.!]\s*'
+  - pattern: 'Thank(?:s| you) for (?:joining|watching|listening|having|sharing|tuning in)\b.*?[\.!]\s*'
     flags: ignorecase
-    comment: "Thank you for joining/watching/listening/etc hallucinations"
+    comment: "Thank you/Thanks for joining/watching/listening/etc hallucinations"
   - pattern: '\bMBC\b\.?\s*'
   - pattern: '\bAmen\b\.?\s*'
     flags: ignorecase
