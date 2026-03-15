@@ -105,6 +105,38 @@ async fn main() -> anyhow::Result<()> {
         api_key.clone(),
     ));
 
+    // Watchdog: if any critical task exits, log the cause to JSONL and kill the process.
+    // tokio::spawn silently swallows panics — this makes them fatal and diagnosable.
+    let watchdog_cancel = root_token.clone();
+    tokio::spawn(async move {
+        let died = tokio::select! {
+            _ = watchdog_cancel.cancelled() => None,
+            r = transcript_handle => Some(("transcript", r)),
+            r = typer_handle => Some(("typer", r)),
+            r = audio_router_handle => Some(("audio_router", r)),
+        };
+        if let Some((name, result)) = died {
+            let reason = match result {
+                Ok(()) => "exited cleanly (unexpected)".to_string(),
+                Err(e) if e.is_panic() => {
+                    let payload = e.into_panic();
+                    if let Some(s) = payload.downcast_ref::<&str>() {
+                        format!("panicked: {s}")
+                    } else if let Some(s) = payload.downcast_ref::<String>() {
+                        format!("panicked: {s}")
+                    } else {
+                        "panicked (unknown payload)".to_string()
+                    }
+                }
+                Err(e) => format!("cancelled: {e}"),
+            };
+            // Log to JSONL (via tracing) so the cause is preserved in debug events
+            tracing::error!("FATAL: {name} task died: {reason}");
+            eprintln!("[FATAL] {name} task died: {reason}");
+            std::process::exit(1);
+        }
+    });
+
     // Start audio capture
     audio_device::start_audio_capture(audio_tx, root_token.child_token())?;
     println!("[INFO] Starting audio capture...");
@@ -120,6 +152,7 @@ async fn main() -> anyhow::Result<()> {
         if root_token.is_cancelled() {
             break;
         }
+
 
         if consecutive_failures == 0 {
             println!("[INFO] Connecting to OpenAI...");
@@ -185,9 +218,7 @@ async fn main() -> anyhow::Result<()> {
 
     let _ = tokio::time::timeout(std::time::Duration::from_secs(3), async {
         let _ = metrics_handle.await;
-        let _ = typer_handle.await;
-        let _ = transcript_handle.await;
-        let _ = audio_router_handle.await;
+        // Other handles are owned by the watchdog task (which will exit via cancel)
     })
     .await;
 

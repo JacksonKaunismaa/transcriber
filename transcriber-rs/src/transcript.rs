@@ -260,14 +260,18 @@ async fn output_transcript(state: &mut TranscriptState, transcript: &str, durati
         log_transcript(&filtered, false);
         info!("Transcript output: {filtered}");
 
-        // Send to typer
-        state
-            .type_tx
-            .send(TypeCommand {
-                text: filtered,
-            })
-            .await
-            .ok();
+        // Send to typer (non-blocking: never let a stuck typer block transcription)
+        match state.type_tx.try_send(TypeCommand {
+            text: filtered,
+        }) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                warn!("Typer channel full — dropping transcript (typer may be stuck)");
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                warn!("Typer channel closed — typer task has died");
+            }
+        }
     } else if !transcript.is_empty() {
         debug!("Filtered out: {transcript}");
         state.metrics_tx.send(MetricsEvent::ContentFiltered).await.ok();

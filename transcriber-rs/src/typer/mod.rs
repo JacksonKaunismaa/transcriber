@@ -51,21 +51,29 @@ pub async fn run_typer_task(
 
                         rules.reload();
                         let rules_clone = rules.clone();
-                        let result = tokio::task::spawn_blocking(move || {
+                        let blocking = tokio::task::spawn_blocking(move || {
                             let window_class = detection::get_focused_window_class();
                             let method = rules_clone.get_method_for_window(&window_class);
                             debug!(window = %window_class, method = %method, "TYPER");
                             backends::type_with_adaptive(&text, &method)
-                        })
-                        .await;
+                        });
 
-                        match result {
-                            Ok(Ok(())) => {}
-                            Ok(Err(e)) => {
+                        // Timeout: don't let a hung subprocess block the typer forever
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(5),
+                            blocking,
+                        )
+                        .await
+                        {
+                            Ok(Ok(Ok(()))) => {}
+                            Ok(Ok(Err(e))) => {
                                 error!("Typing failed: {e}");
                             }
-                            Err(e) => {
+                            Ok(Err(e)) => {
                                 error!("Typer spawn_blocking panicked: {e}");
+                            }
+                            Err(_) => {
+                                error!("Typing timed out after 5s (subprocess may be hung)");
                             }
                         }
                     }
