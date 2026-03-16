@@ -97,6 +97,9 @@ hallucinations:
     flags: ignorecase
   - pattern: 'Subs by www\.zeoranger\.co\.uk\.?\s*'
     flags: ignorecase
+  - pattern: '(?:The )?Transcribed by https?://otter\.ai\.?\s*'
+    flags: ignorecase
+    comment: "Otter.ai watermark hallucination"
 
   # Foreign language hallucinations
   - pattern: 'Belki de sadece\.{0,3}\s*'
