@@ -37,8 +37,13 @@ hallucinations:
   - pattern: '\bOink[!\.]?\s*(?:Oink[!\.]?\s*)*'
     flags: ignorecase
 
-  # YouTube outro / subscribe hallucinations are now caught generically by the
-  # speed hallucination detector (wps >= 10.0) in transcript.rs
+  # YouTube outro / subscribe hallucinations
+  - pattern: 'If you like(?:d)? this video,?\s*(?:don''t forget to )?give it a thumbs up.*'
+    flags: ignorecase
+    comment: "YouTube outro: like/thumbs up/subscribe"
+  - pattern: '(?:don''t forget to )?subscribe to (?:my|our|the) channel.*'
+    flags: ignorecase
+    comment: "YouTube outro: subscribe to channel"
 
   # Website hallucinations
   - pattern: 'www\.larryweaver\.com\.?\s*'
