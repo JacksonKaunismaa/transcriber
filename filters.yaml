@@ -111,6 +111,9 @@ hallucinations:
     comment: "Turkish 'Maybe just...' hallucination"
   - pattern: 'Bonne nuit\.?\s*'
     comment: "French 'Good night' hallucination"
+  - pattern: 'Arigatou gozaimashita\.?\s*'
+    flags: ignorecase
+    comment: "Japanese 'Thank you very much' hallucination"
 
   # Onomatopoeia hallucinations
   - pattern: '\bVroom\b[,!\.]?\s*(?:\bvroom\b[,!\.]?\s*)*'
