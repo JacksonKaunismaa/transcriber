@@ -156,7 +156,7 @@ pub async fn run_audio_router_task(
 
                             match transcript {
                                 Some(text) => {
-                                    info!("Fallback transcription success: {text}");
+                                    info!("Fallback transcription success: {text} [item_id={item_id}]");
                                     metrics_tx.send(MetricsEvent::FallbackSuccess).await.ok();
                                     transcript_tx.send(TranscriptEvent::FallbackCompleted {
                                         item_id,

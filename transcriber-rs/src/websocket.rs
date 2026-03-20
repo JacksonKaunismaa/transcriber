@@ -436,8 +436,8 @@ async fn handle_server_event(
                 .await
                 .ok();
             let transcript = event.transcript.clone().unwrap_or_default();
-            if !transcript.is_empty() {
-                info!("Realtime transcription: {transcript}");
+            if event.item_id.is_none() && !transcript.is_empty() {
+                info!("Realtime transcription: {transcript} [item_id=unknown]");
             }
             if let Some(item_id) = &event.item_id {
                 if let Some(created) = item_created_at.remove(item_id) {
@@ -457,6 +457,9 @@ async fn handle_server_event(
                 let duration_ms = speech_durations
                     .remove(item_id)
                     .and_then(|d| d.duration_ms());
+                if !transcript.is_empty() {
+                    info!("Realtime transcription: {transcript} [item_id={item_id}]");
+                }
                 transcript_tx
                     .send(TranscriptEvent::RealtimeCompleted {
                         item_id: item_id.clone(),
