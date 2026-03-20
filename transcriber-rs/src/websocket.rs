@@ -20,11 +20,17 @@ struct SessionUpdate {
 #[derive(Serialize)]
 struct SessionConfig {
     input_audio_transcription: InputAudioTranscription,
+    input_audio_noise_reduction: NoiseReduction,
 }
 
 #[derive(Serialize)]
 struct InputAudioTranscription {
     model: String,
+}
+
+#[derive(Serialize)]
+struct NoiseReduction {
+    r#type: &'static str,
 }
 
 #[derive(Serialize)]
@@ -192,6 +198,9 @@ async fn do_connection(
         session: SessionConfig {
             input_audio_transcription: InputAudioTranscription {
                 model: model.to_string(),
+            },
+            input_audio_noise_reduction: NoiseReduction {
+                r#type: "near_field",
             },
         },
     };
