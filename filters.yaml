@@ -8,7 +8,7 @@ hallucinations:
   # Common false positives
   - pattern: '\bBye[\.!]?\s*'
     flags: ignorecase
-  - pattern: '\bThank you\.\s*'
+  - pattern: '\bThank you[\.!\?]?\s*'
   - pattern: 'Thank(?:s| you) for (?:joining|watching|listening|having|sharing|tuning in)\b.*?[\.!]\s*'
     flags: ignorecase
     comment: "Thank you/Thanks for joining/watching/listening/etc hallucinations"
@@ -38,12 +38,41 @@ hallucinations:
     flags: ignorecase
 
   # YouTube outro / subscribe hallucinations
+  # Short phrases that the repetition/speed detector can't catch (<10 words)
+  - pattern: 'Thanks for watching!?\s*'
+    flags: ignorecase
+    comment: "YouTube outro: thanks for watching"
+  - pattern: 'Thank you so much for watching\s*[\.!]*\s*'
+    flags: ignorecase
+    comment: "YouTube outro: thank you so much for watching"
+  - pattern: 'Thanks for tuning in\.?\s*(?:We''ll talk to you again soon\.?)?\s*'
+    flags: ignorecase
+    comment: "YouTube outro: thanks for tuning in"
+  - pattern: 'I''m going to go ahead and end this video\.?\s*(?:I will see you in the next video\.?\s*)?'
+    flags: ignorecase
+    comment: "YouTube outro: end this video"
+  - pattern: 'Please leave a comment below[!\.]?\s*'
+    flags: ignorecase
+    comment: "YouTube outro: leave a comment"
+  - pattern: '(?:Like,?\s*)?(?:comment,?\s*)?(?:and\s+)?subscribe\b.*?[\.!]\s*'
+    flags: ignorecase
+    comment: "YouTube outro: like/comment/subscribe"
   - pattern: 'If you like(?:d)? this video,?\s*(?:don''t forget to )?give it a thumbs up.*'
     flags: ignorecase
     comment: "YouTube outro: like/thumbs up/subscribe"
   - pattern: '(?:don''t forget to )?subscribe to (?:my|our|the) channel.*'
     flags: ignorecase
     comment: "YouTube outro: subscribe to channel"
+  # Longer YouTube outros caught by speed detector, but kept as regex for completeness
+  - pattern: '(?:But )?[Ii]f you(?:''re| are) watching this,? make sure to (?:like|subscribe).*(?:Bye[ -]?bye|next time)\.?\s*'
+    flags: ignorecase
+    comment: "YouTube outro: if you're watching make sure to like/subscribe"
+  - pattern: 'If you don''t have a phone.*see you next time\.?\s*'
+    flags: ignorecase
+    comment: "YouTube outro: if you don't have a phone"
+  - pattern: 'Like, subscribe,? and share\b.*?[\.!]+\s*'
+    flags: ignorecase
+    comment: "YouTube outro: like subscribe and share"
 
   # Website hallucinations
   - pattern: 'www\.larryweaver\.com\.?\s*'
