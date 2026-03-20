@@ -278,9 +278,53 @@ async fn output_transcript(state: &mut TranscriptState, transcript: &str, durati
     }
 }
 
-/// Apply a fancy-regex filter.
-fn apply_fancy_replace(regex: &fancy_regex::Regex, text: &str) -> String {
-    regex.replace_all(text, "").into_owned()
+/// Collect all match ranges from multiple patterns on the original text,
+/// merge overlapping ranges, and remove them all at once.
+/// This makes pattern order irrelevant — each pattern sees the original text.
+fn collect_and_remove(text: &str, filters: &[crate::filters::CompiledFilter]) -> String {
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+
+    for f in filters {
+        for m in f.regex.find_iter(text) {
+            if let Ok(m) = m {
+                ranges.push((m.start(), m.end()));
+            }
+        }
+    }
+
+    if ranges.is_empty() {
+        return text.to_string();
+    }
+
+    // Sort by start position, then by end (longest first for same start)
+    ranges.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+
+    // Merge overlapping ranges
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (start, end) in ranges {
+        if let Some(last) = merged.last_mut() {
+            if start <= last.1 {
+                last.1 = last.1.max(end);
+                continue;
+            }
+        }
+        merged.push((start, end));
+    }
+
+    // Build result by copying non-removed segments
+    let mut result = String::with_capacity(text.len());
+    let mut pos = 0;
+    for (start, end) in &merged {
+        if pos < *start {
+            result.push_str(&text[pos..*start]);
+        }
+        pos = *end;
+    }
+    if pos < text.len() {
+        result.push_str(&text[pos..]);
+    }
+
+    result
 }
 
 /// Apply hallucination filters with the 50% rule, then filler filters.
@@ -291,12 +335,11 @@ fn filter_text(state: &TranscriptState, text: &str) -> String {
     }
 
     // Apply filler filters (don't trigger 50% rule)
-    let mut result = filtered;
-    if !state.allow_fillers {
-        for f in &state.filters.fillers {
-            result = apply_fancy_replace(&f.regex, &result);
-        }
-    }
+    let result = if !state.allow_fillers {
+        collect_and_remove(&filtered, &state.filters.fillers)
+    } else {
+        filtered
+    };
 
     let result = whitespace_pattern().replace_all(&result, " ").trim().to_string();
 
@@ -323,19 +366,54 @@ fn apply_hallucination_filters(state: &TranscriptState, text: &str) -> String {
 
     let had_non_ascii = non_ascii_pattern().is_match(original);
 
-    let mut filtered = text.to_string();
-
+    // Collect all match ranges from hallucination + non-ASCII patterns on original text
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
     if !state.allow_bye_thank_you {
         for f in &state.filters.hallucinations {
-            filtered = apply_fancy_replace(&f.regex, &filtered);
+            for m in f.regex.find_iter(text) {
+                if let Ok(m) = m {
+                    ranges.push((m.start(), m.end()));
+                }
+            }
+        }
+    }
+    if !state.allow_non_ascii {
+        for f in &state.filters.non_ascii {
+            for m in f.regex.find_iter(text) {
+                if let Ok(m) = m {
+                    ranges.push((m.start(), m.end()));
+                }
+            }
         }
     }
 
-    if !state.allow_non_ascii {
-        for f in &state.filters.non_ascii {
-            filtered = apply_fancy_replace(&f.regex, &filtered);
+    let filtered = if ranges.is_empty() {
+        text.to_string()
+    } else {
+        ranges.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        for (start, end) in ranges {
+            if let Some(last) = merged.last_mut() {
+                if start <= last.1 {
+                    last.1 = last.1.max(end);
+                    continue;
+                }
+            }
+            merged.push((start, end));
         }
-    }
+        let mut result = String::with_capacity(text.len());
+        let mut pos = 0;
+        for (start, end) in &merged {
+            if pos < *start {
+                result.push_str(&text[pos..*start]);
+            }
+            pos = *end;
+        }
+        if pos < text.len() {
+            result.push_str(&text[pos..]);
+        }
+        result
+    };
 
     let filtered = whitespace_pattern().replace_all(&filtered, " ").trim().to_string();
 
