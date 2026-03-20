@@ -63,6 +63,21 @@ hallucinations:
   - pattern: '(?:don''t forget to )?subscribe to (?:my|our|the) channel.*'
     flags: ignorecase
     comment: "YouTube outro: subscribe to channel"
+  - pattern: '(?:I''ll |and I''ll |we''ll )?see you (?:guys )?(?:in the )?next (?:video|time|week)\.?\s*'
+    flags: ignorecase
+    comment: "YouTube outro: see you next video/time/week"
+  - pattern: 'I hope you enjoyed this video\b.*'
+    flags: ignorecase
+    comment: "YouTube outro: I hope you enjoyed this video"
+  - pattern: '(?:until|till) we meet again\b.*'
+    flags: ignorecase
+    comment: "YouTube/podcast outro: until we meet again"
+  - pattern: '(?:thank(?:s| you) )?for showing up\b.*'
+    flags: ignorecase
+    comment: "YouTube/podcast outro: thanks for showing up"
+  - pattern: 'We love you\.?\s*'
+    flags: ignorecase
+    comment: "YouTube outro: we love you"
   # Longer YouTube outros caught by speed detector, but kept as regex for completeness
   - pattern: '(?:But )?[Ii]f you(?:''re| are) watching this,? make sure to (?:like|subscribe).*(?:Bye[ -]?bye|next time)\.?\s*'
     flags: ignorecase
@@ -77,8 +92,9 @@ hallucinations:
   # Website hallucinations
   - pattern: 'www\.larryweaver\.com\.?\s*'
     flags: ignorecase
-  - pattern: 'Go to Beadaholique\.com.*beading supply needs.?\s*'
+  - pattern: '(?:Go to )?Beadaholique\.com\b.*'
     flags: ignorecase
+    comment: "Beadaholique.com ad hallucination (any variant)"
   - pattern: 'For more information,? go to www\.fema\.gov\.?\s*'
     flags: ignorecase
   - pattern: 'www\.mooji\.org\.?\s*'
@@ -92,6 +108,12 @@ hallucinations:
     comment: "Social media URL hallucinations (youtube/facebook/instagram)"
   - pattern: 'Beading supplies need!?\s*'
     flags: ignorecase
+  - pattern: '(?:www\.)?(?:Flydreamers|engvid|circlelineartschool|cbrnstuff|listenews)\.com\.?\s*'
+    flags: ignorecase
+    comment: "Hallucinated URLs found via transcript mining"
+  - pattern: 'Learn English for free\b.*'
+    flags: ignorecase
+    comment: "engvid.com ad hallucination"
   - pattern: 'Ding(?:-a-ling)+\.{0,3}\s*'
     flags: ignorecase
   - pattern: 'All right,? ladies and gentlemen,? we''ll be right back\.?\s*'
@@ -121,6 +143,14 @@ hallucinations:
   - pattern: '\bCheers\b\.?\s*'
     flags: ignorecase
 
+  # Stage direction hallucinations (model describes sounds instead of transcribing)
+  - pattern: '\*+\s*CLEARS THROAT\s*\*+'
+    flags: ignorecase
+    comment: "Stage direction: **CLEARS THROAT**"
+  - pattern: '\b\w+ laughs\b.*'
+    flags: ignorecase
+    comment: "Stage direction: 'Esteban laughs', 'laughs huskily', etc."
+
   # Name hallucinations
   - pattern: '\bBARBARA MINKOVIC\b\.?\s*'
     flags: ignorecase
@@ -143,6 +173,36 @@ hallucinations:
   - pattern: 'Arigatou gozaimashita\.?\s*'
     flags: ignorecase
     comment: "Japanese 'Thank you very much' hallucination"
+  - pattern: '\bAbonne-toi\b[!\.]?\s*'
+    flags: ignorecase
+    comment: "French 'Subscribe!' YouTube hallucination"
+  - pattern: '\bTcha+[ou]+\b[!\.]?\s*'
+    flags: ignorecase
+    comment: "French/Portuguese 'Bye' (Tchao, Tchaaau, etc.)"
+  - pattern: '\bSalut\b\.?\s*'
+    comment: "French 'Hi/Bye' hallucination"
+  - pattern: 'Podemos mudar\.{0,3}\s*'
+    comment: "Portuguese 'We can change...' hallucination"
+  - pattern: '\bUnd das hei(?:t|ss?t) nicht\b.*'
+    flags: ignorecase
+    comment: "German TV broadcast fragment"
+  - pattern: '(?:In der |Eine )?Sendung\b.*'
+    flags: ignorecase
+    comment: "German 'broadcast/show' TV fragment"
+  - pattern: 'In der Seite liegen\b.*'
+    flags: ignorecase
+    comment: "German TV fragment"
+  - pattern: '(?:Slo )?quiero que queden\b.*'
+    comment: "Spanish TV bleed-through"
+  - pattern: 'trabaj(?:o|) (?:en|siempre)\b.*'
+    comment: "Spanish TV bleed-through"
+  - pattern: 'Om Namah Shivaya\.?\s*'
+    flags: ignorecase
+    comment: "Sanskrit mantra hallucination"
+  - pattern: 'ett joudutaan\.?\s*'
+    comment: "Finnish hallucination"
+  - pattern: 'Hvad det\??\s*'
+    comment: "Danish 'What's that?' hallucination"
 
   # Onomatopoeia hallucinations
   - pattern: '\bVroom\b[,!\.]?\s*(?:\bvroom\b[,!\.]?\s*)*'
@@ -154,6 +214,21 @@ hallucinations:
   - pattern: '\bTch\b\.?\s*'
     flags: ignorecase
     comment: "Tch. (tongue click hallucination)"
+  - pattern: '\bTsk[,\.]?\s*(?:tsk[,\.]?\s*)*'
+    flags: ignorecase
+    comment: "Tsk, tsk. (disapproving click hallucination)"
+  - pattern: '\bBz+\b\.?\s*'
+    flags: ignorecase
+    comment: "Bzzz (buzzing hallucination)"
+  - pattern: '\bcough\b\.?\s*(?:\bcough\b\.?\s*)*'
+    flags: ignorecase
+    comment: "Literal 'cough' transcription of cough sounds"
+  - pattern: '\bpbbt\b\.?\s*'
+    flags: ignorecase
+    comment: "Raspberry/lip sound hallucination"
+  - pattern: '\bMoo+\b[!\.]?\s*'
+    flags: ignorecase
+    comment: "Moo/Moooo (animal sound hallucination)"
 
   # Exclamatory noise hallucinations
   - pattern: '\bBuh+\b\.?\s*'
