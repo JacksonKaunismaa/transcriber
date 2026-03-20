@@ -69,9 +69,6 @@ hallucinations:
   - pattern: 'I hope you enjoyed this video\b.*'
     flags: ignorecase
     comment: "YouTube outro: I hope you enjoyed this video"
-  - pattern: '(?:until|till) we meet again\b.*'
-    flags: ignorecase
-    comment: "YouTube/podcast outro: until we meet again"
   - pattern: '(?:thank(?:s| you) )?for showing up\b.*'
     flags: ignorecase
     comment: "YouTube/podcast outro: thanks for showing up"
