@@ -147,9 +147,6 @@ hallucinations:
   - pattern: '\*+\s*CLEARS THROAT\s*\*+'
     flags: ignorecase
     comment: "Stage direction: **CLEARS THROAT**"
-  - pattern: '\b\w+ laughs\b.*'
-    flags: ignorecase
-    comment: "Stage direction: 'Esteban laughs', 'laughs huskily', etc."
 
   # Name hallucinations
   - pattern: '\bBARBARA MINKOVIC\b\.?\s*'
