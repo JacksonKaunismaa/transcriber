@@ -2,52 +2,6 @@
 
 How the transcriber's logging has evolved from initial Python prototype through the Rust port.
 
-## Quick Reference: Use the Parser
-
-**Don't parse log files by hand.** Use `scratch/parse_logs.py` — it handles all 3 JSONL schemas + txt files automatically.
-
-### Python API (primary interface)
-
-```python
-from scratch.parse_logs import parse_all_sessions, EventType
-
-sessions = parse_all_sessions()                             # all sessions
-sessions = parse_all_sessions(latest=5)                     # last 5
-sessions = parse_all_sessions(after=datetime(2026, 3, 1))   # since March
-
-for session in sessions:
-    print(session.file, session.schema, len(session.events))
-
-    for e in session.outputs:                               # post-filter text
-        print(e.timestamp, e.text)
-
-    for e in session.transcriptions:                        # pre-filter API text
-        print(e.text, e.duration_ms, e.item_id)             # duration from VAD join
-
-    for e in session.metrics:                               # parsed METRICS
-        print(e.extra["parsed"]["rtt_p50_ms"])              # structured dict
-
-    for e in session.events_of_type(EventType.TRANSCRIPTION_RTT):
-        print(e.rtt_ms, e.item_id)                          # per-item RTT
-```
-
-**Key `Event` fields**: `timestamp`, `level`, `event_type`, `message`, `text`, `item_id`, `duration_ms` (VAD-joined), `rtt_ms`, `schema`, `session_file`, `extra` (structured metadata dict).
-
-### CLI (thin wrapper)
-
-```bash
-uv run scratch/parse_logs.py --events output              # post-filter text (what was typed)
-uv run scratch/parse_logs.py --events transcription        # pre-filter API text
-uv run scratch/parse_logs.py --events metrics --latest 1   # METRICS lines from last session
-uv run scratch/parse_logs.py --events all --stats          # per-session summary
-uv run scratch/parse_logs.py --events filtered             # text rejected by filters
-uv run scratch/parse_logs.py --events latency              # ping + transcription RTT
-uv run scratch/parse_logs.py --format jsonl --events all   # normalized JSONL output
-uv run scratch/parse_logs.py --after 2026-03-01            # date filtering
-```
-
-The parser auto-detects schema per-file, normalizes timestamps to local naive datetimes, deduplicates txt/JSONL sessions, joins VAD durations to transcriptions via item_id, parses METRICS into structured dicts, and extracts all metadata from every event type.
-
 ## Mental Model: How to Detect Which Schema a File Uses
 
 There are **3 distinct JSONL schemas** (not 2). Detection from the first JSON line:
