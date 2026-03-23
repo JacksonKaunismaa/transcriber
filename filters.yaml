@@ -225,6 +225,9 @@ hallucinations:
     comment: "Moo/Moooo (animal sound hallucination)"
 
   # Exclamatory noise hallucinations
+  - pattern: '\bAw+\b\.?\s*'
+    flags: ignorecase
+    comment: "Aw, Aww, etc. (sympathy/cuteness exclamation hallucination)"
   - pattern: '\bBuh+\b\.?\s*'
     flags: ignorecase
     comment: "Buhhhhh, Buh, etc."
