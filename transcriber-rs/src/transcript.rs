@@ -506,7 +506,7 @@ fn is_fuzzy_duplicate(state: &TranscriptState, text: &str) -> bool {
         if i >= 7 {
             break;
         }
-        if now - timestamp > 7.0 {
+        if now - timestamp > 20.0 {
             break;
         }
         let ratio = strsim::normalized_levenshtein(text, previous);
