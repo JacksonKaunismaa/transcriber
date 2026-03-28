@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -7,6 +7,22 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::messages::AudioChunk;
+
+/// Shared pause state — toggled by SIGUSR1 from mic-toggle.sh.
+/// When paused, the cpal stream is paused and PipeWire disconnects the node,
+/// allowing the entire RNNoise filter chain to go idle (zero CPU).
+static PAUSED: AtomicBool = AtomicBool::new(false);
+
+/// Check if audio capture is currently paused.
+pub fn is_paused() -> bool {
+    PAUSED.load(Ordering::Relaxed)
+}
+
+/// Set pause state directly. Returns the new state.
+pub fn set_paused(paused: bool) -> bool {
+    PAUSED.store(paused, Ordering::Relaxed);
+    paused
+}
 
 /// Target audio config for OpenAI Realtime API: 24kHz mono PCM16.
 const TARGET_RATE: u32 = 24000;
@@ -175,14 +191,43 @@ pub fn start_audio_capture(
             }
 
             let healthy_since = std::time::Instant::now();
+            let mut currently_paused = false;
 
-            // Monitor loop: check error counter every 100ms
+            // Monitor loop: check error counter and pause state every 100ms
             loop {
                 if cancel.is_cancelled() {
                     break 'rebuild;
                 }
 
                 std::thread::sleep(std::time::Duration::from_millis(100));
+
+                // Handle pause/resume toggled by SIGUSR1
+                let should_pause = is_paused();
+                if should_pause != currently_paused {
+                    if should_pause {
+                        if let Err(e) = stream.pause() {
+                            warn!(error = %e, "Failed to pause audio stream");
+                        } else {
+                            info!(device = %device_name, "Audio stream paused (mic muted)");
+                            println!("[INFO] Audio paused");
+                        }
+                    } else {
+                        if let Err(e) = stream.play() {
+                            warn!(error = %e, "Failed to resume audio stream, rebuilding");
+                            drop(stream);
+                            sleep_cancellable(&cancel, REBUILD_DELAY);
+                            continue 'rebuild;
+                        }
+                        info!(device = %device_name, "Audio stream resumed (mic unmuted)");
+                        println!("[INFO] Audio resumed");
+                    }
+                    currently_paused = should_pause;
+                }
+
+                // Skip error checking while paused
+                if currently_paused {
+                    continue;
+                }
 
                 let errors = error_count.swap(0, Ordering::Relaxed);
                 if errors >= ERROR_THRESHOLD {

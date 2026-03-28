@@ -75,6 +75,29 @@ async fn main() -> anyhow::Result<()> {
         shutdown_token.cancel();
     });
 
+    // SIGUSR1 = pause, SIGUSR2 = resume (used by mic-toggle.sh)
+    // Directional signals avoid desync when rapid keypresses race the toggle script.
+    tokio::spawn(async {
+        let mut pause_sig =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())
+                .expect("failed to register SIGUSR1 handler");
+        let mut resume_sig =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined2())
+                .expect("failed to register SIGUSR2 handler");
+        loop {
+            tokio::select! {
+                _ = pause_sig.recv() => {
+                    let now_paused = audio_device::set_paused(true);
+                    info!(paused = now_paused, "SIGUSR1: audio capture paused");
+                }
+                _ = resume_sig.recv() => {
+                    let now_paused = audio_device::set_paused(false);
+                    info!(paused = now_paused, "SIGUSR2: audio capture resumed");
+                }
+            }
+        }
+    });
+
     // ── Spawn long-lived tasks ───────────────────────────────────────
 
     let metrics_handle = tokio::spawn(metrics::run_metrics_task(
