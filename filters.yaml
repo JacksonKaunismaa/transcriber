@@ -249,7 +249,10 @@ hallucinations:
     flags: ignorecase
     comment: "Stuttering hallucination (e.g., B-b-b-b-b-b)"
 
-  # Media title hallucinations
+  # Media/broadcast hallucinations
+  - pattern: 'MING PAO (?:CANADA|TORONTO)\s*(?://\s*MING PAO (?:CANADA|TORONTO)\s*)*\.?\s*'
+    flags: ignorecase
+    comment: "Ming Pao newspaper broadcast watermark hallucination"
   - pattern: 'RESIDENT EVIL \d+\.?\s*'
     comment: "RESIDENT EVIL 3, etc."
 
