@@ -255,6 +255,9 @@ hallucinations:
     comment: "Ming Pao newspaper broadcast watermark hallucination"
   - pattern: 'RESIDENT EVIL \d+\.?\s*'
     comment: "RESIDENT EVIL 3, etc."
+  - pattern: '\bPewDiePie\b\.?\d*\s*'
+    flags: ignorecase
+    comment: "PewDiePie YouTube channel name hallucination (with optional trailing numbers)"
 
   # Music/lyrics hallucinations
   - pattern: '♪.*'
