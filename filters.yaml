@@ -85,6 +85,9 @@ hallucinations:
   - pattern: 'Like, subscribe,? and share\b.*?[\.!]+\s*'
     flags: ignorecase
     comment: "YouTube outro: like subscribe and share"
+  - pattern: '(?:by )?turn(?:ing)? the lights? out\b.*'
+    flags: ignorecase
+    comment: "YouTube outro: turning the lights out guys thank you for watching"
 
   # Website hallucinations
   - pattern: 'www\.larryweaver\.com\.?\s*'
