@@ -200,14 +200,14 @@ async fn do_connection(
         .await?;
     info!("Transcription session config sent (model: {model})");
 
-    // Ping keepalive with pong timeout (matches Python: ping_interval=20, ping_timeout=10)
-    let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(20));
+    // Ping keepalive with pong timeout
+    let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(5));
     ping_interval.tick().await;
     let mut last_ping: Option<std::time::Instant> = None;
     let mut last_pong = std::time::Instant::now();
     let ping_timeout = std::time::Duration::from_secs(10);
 
-    // Check pong timeout every 5s (more frequently than ping_timeout to catch it promptly)
+    // Check pong timeout every 5s
     let mut pong_check = tokio::time::interval(std::time::Duration::from_secs(5));
     pong_check.tick().await;
 

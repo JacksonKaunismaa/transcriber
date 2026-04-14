@@ -149,7 +149,7 @@ To see all options:
 5. Displays transcriptions in the terminal (with [PARTIAL] and [FINAL] markers)
 6. Saves all events to `conversations/debug_events_YYYYMMDD_HHMMSS.jsonl`
 
-**The session will run indefinitely** - it won't timeout during periods of silence. The WebSocket connection sends keepalive pings every 20 seconds to maintain the connection, so you can leave it running as long as you need.
+**The session will run indefinitely** - it won't timeout during periods of silence. The WebSocket connection sends keepalive pings every 5 seconds to maintain the connection, so you can leave it running as long as you need.
 
 ### Stopping the transcription:
 

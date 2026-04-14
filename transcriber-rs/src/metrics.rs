@@ -115,6 +115,54 @@ impl RecentWindow {
     }
 }
 
+/// Time-decayed exponential moving average.
+///
+/// Uses a half-life parameter: after `half_life` seconds of sustained new values,
+/// the EMA is halfway to the new level. Single outliers barely move it.
+/// Formula: alpha = 1 - exp(-dt / half_life), ema = alpha * sample + (1 - alpha) * ema
+struct Ema {
+    value: f64,
+    half_life_secs: f64,
+    last_update: Option<Instant>,
+}
+
+impl Ema {
+    fn new(half_life_secs: f64) -> Self {
+        Self {
+            value: 0.0,
+            half_life_secs,
+            last_update: None,
+        }
+    }
+
+    fn update(&mut self, sample: f64) {
+        let now = Instant::now();
+        match self.last_update {
+            None => self.value = sample,
+            Some(last) => {
+                let dt = now.duration_since(last).as_secs_f64();
+                let alpha = 1.0 - (-dt / self.half_life_secs).exp();
+                self.value = alpha * sample + (1.0 - alpha) * self.value;
+            }
+        }
+        self.last_update = Some(now);
+    }
+
+    /// Current EMA value, decayed toward zero based on time since last sample.
+    /// During silence (no new samples), the value fades out rather than staying
+    /// frozen at the last known level.
+    fn current(&self) -> f64 {
+        match self.last_update {
+            None => 0.0,
+            Some(last) => {
+                let dt = last.elapsed().as_secs_f64();
+                let decay = (-dt / self.half_life_secs).exp();
+                self.value * decay
+            }
+        }
+    }
+}
+
 /// Metrics counters, owned exclusively by the metrics task.
 /// No locks needed — only this task reads/writes these.
 struct Metrics {
@@ -137,8 +185,8 @@ struct Metrics {
     recent: RecentWindow,
     last_health: &'static str,
     connected: bool,
-    ping_rtts: VecDeque<u64>,
-    transcription_rtts: VecDeque<u64>,
+    ping_rtt_ema: Ema,
+    transcription_rtt_ema: Ema,
 }
 
 impl Metrics {
@@ -163,8 +211,8 @@ impl Metrics {
             recent: RecentWindow::new(),
             last_health: "ok",
             connected: false,
-            ping_rtts: VecDeque::new(),
-            transcription_rtts: VecDeque::new(),
+            ping_rtt_ema: Ema::new(60.0),
+            transcription_rtt_ema: Ema::new(60.0),
         }
     }
 
@@ -221,17 +269,11 @@ impl Metrics {
             }
             MetricsEvent::ApiError => self.api_errors += 1,
             MetricsEvent::PingRtt { millis } => {
-                self.ping_rtts.push_back(millis);
-                if self.ping_rtts.len() > 100 {
-                    self.ping_rtts.pop_front();
-                }
+                self.ping_rtt_ema.update(millis as f64);
                 self.update_health();
             }
             MetricsEvent::TranscriptionRtt { millis, .. } => {
-                self.transcription_rtts.push_back(millis);
-                if self.transcription_rtts.len() > 100 {
-                    self.transcription_rtts.pop_front();
-                }
+                self.transcription_rtt_ema.update(millis as f64);
                 self.update_health();
             }
         }
@@ -240,12 +282,14 @@ impl Metrics {
     fn log_stats(&mut self) {
         let minutes = self.start_time.elapsed().as_secs() / 60;
         let rss_mb = get_rss_mb();
-        let ping_stats = percentiles(&self.ping_rtts)
-            .map(|(p50, p95)| format!("ping p50:{p50}ms p95:{p95}ms"))
-            .unwrap_or_else(|| "ping -".to_string());
-        let rtt_stats = percentiles(&self.transcription_rtts)
-            .map(|(p50, p95)| format!("rtt p50:{p50}ms p95:{p95}ms"))
-            .unwrap_or_else(|| "rtt -".to_string());
+        let ping_stats = match self.ping_rtt_ema.last_update {
+            Some(_) => format!("ping ema:{:.0}ms", self.ping_rtt_ema.current()),
+            None => "ping -".to_string(),
+        };
+        let rtt_stats = match self.transcription_rtt_ema.last_update {
+            Some(_) => format!("rtt ema:{:.0}ms", self.transcription_rtt_ema.current()),
+            None => "rtt -".to_string(),
+        };
 
         // Prune entries older than 1 hour
         self.recent.prune(Duration::from_secs(60 * 60));
@@ -318,24 +362,15 @@ impl Metrics {
         }
     }
 
-    /// Check if recent latency indicates degradation.
-    /// Uses transcription RTT (last 8) and ping RTT (last 8) independently.
-    /// Either one can trigger degradation.
+    /// Check if recent latency indicates degradation using ping RTT EMA.
+    /// Ping measures pure network round-trip, which is what "degraded" means
+    /// from the user's perspective (bad VPN / network connection).
+    /// Transcription RTT is NOT used — it's dominated by OpenAI's server-side
+    /// processing time (~700ms), not network latency.
+    /// With a 60s half-life and pings every 5s (alpha≈0.080), reaching 400ms
+    /// from a ~126ms baseline requires ~30s of sustained bad pings.
     fn is_latency_degraded(&self) -> bool {
-        self.is_rtt_degraded(&self.transcription_rtts, 2000, 3000)
-            || self.is_rtt_degraded(&self.ping_rtts, 500, 1000)
-    }
-
-    fn is_rtt_degraded(&self, rtts: &VecDeque<u64>, p50_limit: u64, p95_limit: u64) -> bool {
-        let recent: Vec<u64> = rtts.iter().rev().take(8).copied().collect();
-        if recent.len() < 3 {
-            return false;
-        }
-        let mut sorted = recent.clone();
-        sorted.sort_unstable();
-        let p50 = sorted[sorted.len() / 2];
-        let p95 = sorted[(sorted.len() * 95 / 100).min(sorted.len() - 1)];
-        p50 > p50_limit || p95 > p95_limit
+        self.ping_rtt_ema.current() > 400.0
     }
 }
 
@@ -383,19 +418,6 @@ pub async fn run_metrics_task(
             }
         }
     }
-}
-
-/// Compute p50 and p95 from a deque of values. Returns (p50, p95) or None if empty.
-fn percentiles(values: &VecDeque<u64>) -> Option<(u64, u64)> {
-    if values.is_empty() {
-        return None;
-    }
-    let mut sorted: Vec<u64> = values.iter().copied().collect();
-    sorted.sort_unstable();
-    let len = sorted.len();
-    let p50 = sorted[len / 2];
-    let p95 = sorted[(len * 95 / 100).min(len - 1)];
-    Some((p50, p95))
 }
 
 /// Read RSS from /proc/self/status (Linux only).

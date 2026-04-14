@@ -302,7 +302,7 @@ Added:
 - Rolling time windows: `5m`, `15m`, `1h`, `all` (each with rt/to/fb/filt)
 - `conn:X/Y`, `expires`, `reconnects`, `short_skip`
 
-### Version 3: Rust with RTT (Mar 4, 2026 -- present)
+### Version 3: Rust with RTT (Mar 4, 2026 -- Apr 14, 2026)
 
 ```
 METRICS [1m] | rss:28MB | ping p50:122ms p95:122ms | rtt p50:826ms p95:2156ms | 5m: rt:4 to:0 (100%) fb:0/0 filt:1 | 15m: ... | 1h: ... | all: ... | races:0 dupes:0 short_skip:0 | conn:1/1 expires:0 reconnects:0 | errors: ws=0 api=0
@@ -310,14 +310,24 @@ METRICS [1m] | rss:28MB | ping p50:122ms p95:122ms | rtt p50:826ms p95:2156ms | 
 
 Added `ping p50/p95` and `rtt p50/p95` percentile tracking (last 100 samples each). Shows `-` when no data available yet.
 
+### Version 4: EMA latency (Apr 14, 2026 -- present)
+
+```
+METRICS [1m] | rss:34MB | ping ema:126ms | rtt ema:675ms | 5m: rt:3 to:0 (100%) fb:0/0 filt:1 | 15m: ... | 1h: ... | all: ... | races:0 dupes:0 short_skip:0 | conn:1/1 expires:0 reconnects:0 | errors: ws=0 api=0
+```
+
+Replaced p50/p95 percentiles (computed over last 100 samples in a ring buffer) with time-decayed exponential moving averages (60s half-life). EMA decays toward zero during silence instead of staying frozen at the last value. Health check now uses only ping EMA > 400ms for "degraded" — transcription RTT is logged for diagnostics but doesn't affect health (it's dominated by OpenAI server-side processing, not network latency). Ping interval reduced from 20s to 5s.
+
 ### METRICS Field Reference
 
 | Field | Meaning | Since |
 |-------|---------|-------|
 | `[Nm]` | Session uptime in minutes | v1 (Python) |
 | `rss` | Resident set size in MB | v2 (Rust) |
-| `ping p50/p95` | WebSocket ping RTT percentiles (ms) | v3 |
-| `rtt p50/p95` | Transcription RTT percentiles (ms) | v3 |
+| `ping p50/p95` | WebSocket ping RTT percentiles (ms) | v3 (removed in v4) |
+| `rtt p50/p95` | Transcription RTT percentiles (ms) | v3 (removed in v4) |
+| `ping ema` | Ping RTT exponential moving average (ms, 60s half-life) | v4 |
+| `rtt ema` | Transcription RTT EMA (ms, 60s half-life, diagnostic only) | v4 |
 | `rt` | Realtime API transcription count (per window) | v2 |
 | `to` | Timeout count + success % (per window) | v2 |
 | `fb` | Fallback ok / total (per window) | v2 |
