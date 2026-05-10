@@ -131,10 +131,16 @@ async fn handle_event(state: &mut TranscriptState, event: TranscriptEvent) {
             transcript,
             duration_ms,
         } => {
-            // Race prevention: check if already completed
             if state.completed_items.contains(&item_id) {
-                debug!("Skipping already-completed item {}", &item_id[..20.min(item_id.len())]);
+                // Late arrival after the fallback path already marked this item complete.
+                // Don't drop blindly: if the prior completion was an empty fallback
+                // (e.g. "no matching chunks"), we never emitted text and we lose the
+                // content. Route through output_transcript — its fuzzy-dedup will
+                // suppress if the prior completion already produced similar text.
+                debug!("Late Realtime for already-completed item {} — routing through dedup",
+                       &item_id[..20.min(item_id.len())]);
                 state.metrics_tx.send(MetricsEvent::FallbackRace).await.ok();
+                output_transcript(state, &transcript, duration_ms).await;
                 return;
             }
             state.completed_items.insert(item_id.clone());
@@ -149,10 +155,11 @@ async fn handle_event(state: &mut TranscriptState, event: TranscriptEvent) {
             transcript,
             duration_ms,
         } => {
-            // Same race prevention
             if state.completed_items.contains(&item_id) {
-                debug!("Skipping already-completed item (fallback) {}", &item_id[..20.min(item_id.len())]);
+                debug!("Late Fallback for already-completed item {} — routing through dedup",
+                       &item_id[..20.min(item_id.len())]);
                 state.metrics_tx.send(MetricsEvent::FallbackRace).await.ok();
+                output_transcript(state, &transcript, duration_ms).await;
                 return;
             }
             state.completed_items.insert(item_id.clone());

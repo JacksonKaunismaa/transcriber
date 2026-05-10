@@ -43,10 +43,19 @@ pub async fn run_audio_router_task(
     cancel: CancellationToken,
     api_key: String,
 ) {
-    let mut audio_buffer: Vec<(u64, Vec<u8>)> = Vec::new(); // (timestamp_ms, raw PCM bytes)
+    // Chunks tagged with session-relative ms (matching OpenAI's audio_start_ms domain),
+    // not raw cpal uptime. See session_origin_ms below.
+    let mut audio_buffer: Vec<(u64, Vec<u8>)> = Vec::new();
     let mut speech_times: HashMap<String, SpeechTiming> = HashMap::new();
     let mut timeout_check = tokio::time::interval(std::time::Duration::from_secs(1));
     timeout_check.tick().await;
+
+    // Cpal uptime ms at the start of the current OpenAI session. OpenAI's
+    // audio_start_ms / audio_end_ms reset to ~0 on each session.created, so
+    // local chunk timestamps must reset too — otherwise extract_audio_chunks
+    // searches in the wrong window after any reconnect.
+    let mut session_origin_ms: u64 = 0;
+    let mut latest_chunk_ts_ms: u64 = 0;
 
     let http_client = reqwest::Client::new();
 
@@ -66,8 +75,12 @@ pub async fn run_audio_router_task(
                             .flat_map(|s| s.to_le_bytes())
                             .collect();
 
-                        // Store in buffer for potential fallback
-                        audio_buffer.push((chunk.timestamp_ms, bytes.clone()));
+                        // Track latest cpal uptime so SessionReset can re-anchor.
+                        latest_chunk_ts_ms = chunk.timestamp_ms;
+                        let session_relative_ts = chunk.timestamp_ms.saturating_sub(session_origin_ms);
+
+                        // Store in buffer for potential fallback (session-relative ts)
+                        audio_buffer.push((session_relative_ts, bytes.clone()));
 
                         // Base64 encode and send to WebSocket
                         let audio_b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -104,7 +117,10 @@ pub async fn run_audio_router_task(
                     Some(AudioEvent::SessionReset) => {
                         audio_buffer.clear();
                         speech_times.clear();
-                        debug!("Session reset: cleared audio buffer and speech times");
+                        // Re-anchor: next chunk's session-relative ts will be ~0,
+                        // matching OpenAI's audio_start_ms after session.created.
+                        session_origin_ms = latest_chunk_ts_ms;
+                        debug!("Session reset: cleared audio buffer; new origin {session_origin_ms}ms");
                     }
                     None => break,
                 }
