@@ -79,11 +79,12 @@ struct ErrorData {
 
 // ── WebSocket Connection ────────────────────────────────────────────
 
-// GA requires a `?model=` URL param. For transcription-only sessions, the URL
-// model must be a Realtime-mode model (e.g. gpt-realtime); the *actual*
-// transcription engine is set via session.update → audio.input.transcription.model.
-// Passing whisper-1 here fails with "Model 'whisper-1' is not supported in realtime mode".
-const WS_URL: &str = "wss://api.openai.com/v1/realtime?model=gpt-realtime";
+// Transcription-only sessions use `?intent=transcription`. Connecting with
+// `?model=gpt-realtime` instead opens a *realtime* (speech-to-speech) session,
+// and the server then rejects our `session.update` with session.type:"transcription"
+// as "Passing a transcription session update event to a realtime session is not allowed."
+// The actual transcription engine is selected via session.update → audio.input.transcription.model.
+const WS_URL: &str = "wss://api.openai.com/v1/realtime?intent=transcription";
 
 /// Result of a single WebSocket connection attempt.
 pub enum ConnectionResult {
