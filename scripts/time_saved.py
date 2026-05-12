@@ -52,13 +52,12 @@ def parse_speech_transcripts(conversations_dir: Path) -> list[dict]:
             ts_str = event.get("timestamp", "")
             if not ts_str:
                 continue
-            # Timestamps are either naive (old: local time) or UTC with Z suffix.
-            # Normalize both to naive local time for consistency with .txt format.
-            if "Z" in ts_str or "+" in ts_str:
-                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            # Timestamps may be naive (old: local time), UTC with Z suffix, or
+            # tz-aware with an offset (post-Toronto move: e.g. -04:00).
+            # Normalize all to naive local time for consistency with .txt format.
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            if ts.tzinfo is not None:
                 ts = ts.astimezone().replace(tzinfo=None)
-            else:
-                ts = datetime.fromisoformat(ts_str)
             entries.append({'timestamp': ts, 'text': text, 'chars': len(text)})
             jsonl_sessions_with_transcripts.add(session_id)
 
