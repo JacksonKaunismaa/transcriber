@@ -19,7 +19,18 @@ struct SessionUpdate {
 
 #[derive(Serialize)]
 struct SessionConfig {
-    input_audio_transcription: InputAudioTranscription,
+    r#type: &'static str,
+    audio: AudioConfig,
+}
+
+#[derive(Serialize)]
+struct AudioConfig {
+    input: AudioInput,
+}
+
+#[derive(Serialize)]
+struct AudioInput {
+    transcription: InputAudioTranscription,
 }
 
 #[derive(Serialize)]
@@ -68,7 +79,11 @@ struct ErrorData {
 
 // ── WebSocket Connection ────────────────────────────────────────────
 
-const WS_URL: &str = "wss://api.openai.com/v1/realtime?intent=transcription";
+// GA requires a `?model=` URL param. For transcription-only sessions, the URL
+// model must be a Realtime-mode model (e.g. gpt-realtime); the *actual*
+// transcription engine is set via session.update → audio.input.transcription.model.
+// Passing whisper-1 here fails with "Model 'whisper-1' is not supported in realtime mode".
+const WS_URL: &str = "wss://api.openai.com/v1/realtime?model=gpt-realtime";
 
 /// Result of a single WebSocket connection attempt.
 pub enum ConnectionResult {
@@ -145,7 +160,6 @@ async fn do_connection(
     let request = Request::builder()
         .uri(WS_URL)
         .header("Authorization", format!("Bearer {api_key}"))
-        .header("OpenAI-Beta", "realtime=v1")
         .header("Host", "api.openai.com")
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")
@@ -186,12 +200,18 @@ async fn do_connection(
         "[INFO] WebSocket connection established (transcription mode, model: {model})"
     );
 
-    // Send session config
+    // Send session config (GA shape: type:"session.update", session.type:"transcription",
+    // audio.input.transcription.model)
     let session_update = SessionUpdate {
-        r#type: "transcription_session.update",
+        r#type: "session.update",
         session: SessionConfig {
-            input_audio_transcription: InputAudioTranscription {
-                model: model.to_string(),
+            r#type: "transcription",
+            audio: AudioConfig {
+                input: AudioInput {
+                    transcription: InputAudioTranscription {
+                        model: model.to_string(),
+                    },
+                },
             },
         },
     };
@@ -377,7 +397,10 @@ async fn handle_server_event(
         "session.created" => EventAction::SessionCreated,
         "session.updated" => EventAction::SessionUpdated,
 
-        "conversation.item.created" => {
+        // GA renamed "conversation.item.created" → "conversation.item.added"
+        // (+ separate "conversation.item.done"). Accept both so old sessions
+        // and any straggler events still register.
+        "conversation.item.created" | "conversation.item.added" => {
             if let Some(item) = &event.item {
                 if let Some(id) = &item.id {
                     item_created_at.insert(id.clone(), std::time::Instant::now());
