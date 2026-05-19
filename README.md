@@ -40,6 +40,12 @@ cd transcriber-rs && cargo build --release
 
 The binary will be at `transcriber-rs/target/release/transcriber`.
 
+The build pulls in a locally-patched copy of `cpal` from `transcriber-rs/vendor/cpal/`
+via `[patch.crates-io]`. The patch fixes an upstream busy-spin
+([cpal#785](https://github.com/RustAudio/cpal/issues/785)) that pegs one CPU
+core whenever the mic is muted on PipeWire-Pulse setups — see
+`transcriber-rs/vendor/cpal/PATCH.md` for what changed and how to update.
+
 ### 3. Set up your API key
 
 Create a `.env` file in the project root:

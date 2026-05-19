@@ -58,3 +58,10 @@ reqwest = { version = "0.12", features = ["json", "multipart", "native-tls"] }
 # Misc
 futures-util = "0.3"
 url = "2"
+
+# Vendored cpal with a patched ALSA worker that sleeps on a condvar when
+# paused. Stock cpal 0.15.3 busy-spins one core when stream.pause() is called
+# on PipeWire-Pulse-backed devices (cpal#785). See vendor/cpal/src/host/alsa/mod.rs
+# for the patch — grep "cpal#785".
+[patch.crates-io]
+cpal = { path = "vendor/cpal" }

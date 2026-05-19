@@ -9,8 +9,11 @@ use tracing::{error, info, warn};
 use crate::messages::AudioChunk;
 
 /// Shared pause state — toggled by SIGUSR1 from mic-toggle.sh.
-/// When paused, the cpal stream is paused and PipeWire disconnects the node,
-/// allowing the entire RNNoise filter chain to go idle (zero CPU).
+/// When paused, the cpal stream is paused; the patched cpal worker
+/// (see `vendor/cpal/PATCH.md`) then blocks on a condvar instead of
+/// busy-spinning in alsa::poll(), so the cpal_alsa_in thread sits at 0% CPU
+/// while muted. PipeWire/RNNoise CPU is unaffected — they stay at their
+/// baseline whether muted or not.
 static PAUSED: AtomicBool = AtomicBool::new(false);
 
 /// Check if audio capture is currently paused.
