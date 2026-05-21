@@ -9,22 +9,31 @@ use clap::Parser;
     name = "transcribe",
     about = "Real-time audio transcription with OpenAI API",
     after_help = "\
-Available models (GA Realtime API — whisper-1 retired May 2026):
-  gpt-4o-transcribe       GPT-4o transcription (default, high quality)
-  gpt-4o-mini-transcribe  GPT-4o mini transcription (faster, lower cost)
-  gpt-realtime-whisper    New Whisper successor in Realtime API
+Available models (GA Realtime API):
+  gpt-realtime-whisper    Whisper streaming with local VAD + manual commits (default)
+  gpt-4o-transcribe       GPT-4o transcription (server VAD, no commits needed)
+  gpt-4o-mini-transcribe  GPT-4o mini transcription (cheapest)
+
+Local VAD endpoints whisper utterances since the server rejects turn_detection
+for that model. delay only applies to whisper; ignored for other models.
 
 Examples:
-  transcribe                          # Use default gpt-4o-transcribe
-  transcribe --model gpt-realtime-whisper
-  transcribe --allow-bye-thank-you    # Disable hallucination filtering
-  transcribe --allow-non-ascii        # Allow non-ASCII characters"
+  transcribe                              # gpt-realtime-whisper, delay=high
+  transcribe --delay medium               # Snappier feel, may drop sentence-initial words
+  transcribe --model gpt-4o-transcribe    # Old behavior (server VAD)
+  transcribe --allow-bye-thank-you        # Disable hallucination filtering"
 )]
 pub struct Config {
     /// Transcription model to use
-    #[arg(short = 'm', long, default_value = "gpt-4o-transcribe",
-           value_parser = ["gpt-4o-transcribe", "gpt-4o-mini-transcribe", "gpt-realtime-whisper"])]
+    #[arg(short = 'm', long, default_value = "gpt-realtime-whisper",
+           value_parser = ["gpt-realtime-whisper", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"])]
     pub model: String,
+
+    /// Latency/accuracy tradeoff for gpt-realtime-whisper (higher = more accurate, more lag).
+    /// "high" default: prioritizes not dropping sentence-initial words over snappy feel.
+    #[arg(long, default_value = "high",
+           value_parser = ["minimal", "low", "medium", "high", "xhigh"])]
+    pub delay: String,
 
     /// Disable hallucination filtering (false positives, YouTube outros, etc.)
     #[arg(long)]

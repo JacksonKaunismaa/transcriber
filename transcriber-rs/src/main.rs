@@ -122,10 +122,8 @@ async fn main() -> anyhow::Result<()> {
         audio_rx,
         audio_event_rx,
         ws_cmd_tx,
-        transcript_tx.clone(),
         metrics_tx.clone(),
         root_token.child_token(),
-        api_key.clone(),
     ));
 
     // Watchdog: if any critical task exits, log the cause to JSONL and kill the process.
@@ -188,6 +186,7 @@ async fn main() -> anyhow::Result<()> {
         let result = websocket::run_connection(
             &api_key,
             &config.model,
+            &config.delay,
             &mut ws_cmd_rx,
             &audio_event_tx,
             &transcript_tx,

@@ -36,6 +36,8 @@ struct AudioInput {
 #[derive(Serialize)]
 struct InputAudioTranscription {
     model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delay: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -109,6 +111,7 @@ pub enum ConnectionResult {
 pub async fn run_connection(
     api_key: &str,
     model: &str,
+    delay: &str,
     ws_cmd_rx: &mut mpsc::Receiver<WsCommand>,
     audio_event_tx: &mpsc::Sender<AudioEvent>,
     transcript_tx: &mpsc::Sender<TranscriptEvent>,
@@ -118,6 +121,7 @@ pub async fn run_connection(
     match do_connection(
         api_key,
         model,
+        delay,
         ws_cmd_rx,
         audio_event_tx,
         transcript_tx,
@@ -150,6 +154,7 @@ pub async fn run_connection(
 async fn do_connection(
     api_key: &str,
     model: &str,
+    delay: &str,
     ws_cmd_rx: &mut mpsc::Receiver<WsCommand>,
     audio_event_tx: &mpsc::Sender<AudioEvent>,
     transcript_tx: &mpsc::Sender<TranscriptEvent>,
@@ -202,7 +207,10 @@ async fn do_connection(
     );
 
     // Send session config (GA shape: type:"session.update", session.type:"transcription",
-    // audio.input.transcription.model)
+    // audio.input.transcription.model). The `delay` field is whisper-only — the server
+    // rejects it for gpt-4o-transcribe models. With manual commits there's no
+    // turn_detection to set; whisper requires turn_detection=null anyway.
+    let delay_field = (model == "gpt-realtime-whisper").then(|| delay.to_string());
     let session_update = SessionUpdate {
         r#type: "session.update",
         session: SessionConfig {
@@ -211,6 +219,7 @@ async fn do_connection(
                 input: AudioInput {
                     transcription: InputAudioTranscription {
                         model: model.to_string(),
+                        delay: delay_field.clone(),
                     },
                 },
             },
@@ -219,7 +228,10 @@ async fn do_connection(
     ws_write
         .send(Message::Text(serde_json::to_string(&session_update)?.into()))
         .await?;
-    info!("Transcription session config sent (model: {model})");
+    match &delay_field {
+        Some(d) => info!("Transcription session config sent (model: {model}, delay: {d})"),
+        None => info!("Transcription session config sent (model: {model})"),
+    }
 
     // Ping keepalive with pong timeout
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(5));
@@ -260,7 +272,7 @@ async fn do_connection(
                 }
             }
 
-            // Forward audio from Audio Router → WebSocket
+            // Forward commands from Audio Router → WebSocket
             cmd = ws_cmd_rx.recv() => {
                 match cmd {
                     Some(WsCommand::SendAudio { audio_b64 }) => {
@@ -270,6 +282,17 @@ async fn do_connection(
                         })?;
                         if let Err(e) = ws_write.send(Message::Text(msg.into())).await {
                             warn!("Failed to send audio: {e}");
+                            break;
+                        }
+                    }
+                    Some(WsCommand::Commit) => {
+                        // Trigger transcription of everything appended since the
+                        // last commit. Server emits .completed after this fires.
+                        if let Err(e) = ws_write
+                            .send(Message::Text(r#"{"type":"input_audio_buffer.commit"}"#.into()))
+                            .await
+                        {
+                            warn!("Failed to send commit: {e}");
                             break;
                         }
                     }
@@ -285,6 +308,11 @@ async fn do_connection(
             msg = ws_read.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
+                        // Raw event dump for protocol debugging. Set DUMP_WS_EVENTS=1.
+                        if std::env::var("DUMP_WS_EVENTS").is_ok() {
+                            let truncated: String = text.chars().take(2000).collect();
+                            info!("WS_RAW: {truncated}");
+                        }
                         let event_result = handle_server_event(
                             &text,
                             audio_event_tx,
@@ -303,7 +331,7 @@ async fn do_connection(
                             EventAction::SessionUpdated => {
                                 info!("Session configured — ready for transcription");
                                 println!("[INFO] Session configuration updated");
-                                println!("[INFO] Fallback transcription enabled (2.5s timeout)");
+                                println!("[INFO] Local VAD active — utterances committed on detected silence");
                                 println!("[INFO] Speak into your microphone. Transcription will be typed and logged.");
                                 println!("[INFO] The session will stay active indefinitely - silence is OK!");
                                 println!("[INFO] Press Ctrl+C to stop.\n");

@@ -15,6 +15,10 @@ pub struct AudioChunk {
 pub enum WsCommand {
     /// Send base64-encoded audio to the Realtime API
     SendAudio { audio_b64: String },
+    /// Tell the server to finalize the current input buffer and run transcription.
+    /// Triggered by local VAD when end-of-utterance is detected. Required because
+    /// gpt-realtime-whisper rejects server-side VAD, so the client must endpoint.
+    Commit,
 }
 
 /// Events from WebSocket task → Audio Router.

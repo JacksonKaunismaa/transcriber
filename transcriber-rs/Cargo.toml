@@ -58,6 +58,7 @@ reqwest = { version = "0.12", features = ["json", "multipart", "native-tls"] }
 # Misc
 futures-util = "0.3"
 url = "2"
+voice_activity_detector = "0.2.1"
 
 # Vendored cpal with a patched ALSA worker that sleeps on a condvar when
 # paused. Stock cpal 0.15.3 busy-spins one core when stream.pause() is called
