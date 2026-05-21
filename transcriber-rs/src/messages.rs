@@ -5,8 +5,6 @@
 
 /// Raw PCM audio from cpal callback → Audio Router.
 pub struct AudioChunk {
-    /// Milliseconds since session start
-    pub timestamp_ms: u64,
     /// Raw i16 PCM samples (1024 frames, 24kHz, mono)
     pub data: Vec<i16>,
 }
@@ -18,25 +16,14 @@ pub enum WsCommand {
     /// Tell the server to finalize the current input buffer and run transcription.
     /// Triggered by local VAD when end-of-utterance is detected. Required because
     /// gpt-realtime-whisper rejects server-side VAD, so the client must endpoint.
-    Commit,
+    /// `utterance_duration_ms` is the local-VAD-measured speech duration (not
+    /// the total committed audio — excludes pre-speech prefix and trailing
+    /// silence). Used by the transcript task's wps-based hallucination filter.
+    Commit { utterance_duration_ms: Option<u64> },
 }
 
 /// Events from WebSocket task → Audio Router.
 pub enum AudioEvent {
-    /// VAD detected speech start
-    SpeechStarted {
-        item_id: String,
-        audio_start_ms: u64,
-    },
-    /// VAD detected speech stop
-    SpeechStopped {
-        item_id: String,
-        audio_end_ms: u64,
-    },
-    /// Realtime API delivered transcription — cancel pending fallback
-    ItemCompleted {
-        item_id: String,
-    },
     /// New WebSocket session — API timestamps reset to 0
     SessionReset,
 }
@@ -50,16 +37,19 @@ pub enum TranscriptEvent {
     RealtimeCompleted {
         item_id: String,
         transcript: String,
-        /// Speech duration in milliseconds (from VAD: audio_end_ms - audio_start_ms)
-        duration_ms: Option<u64>,
+        /// Speech duration in ms, measured by local VAD (excludes pre-speech
+    /// prefix and post-speech silence — see WsCommand::Commit docs). Used
+    /// by the wps-based hallucination filter.
+    duration_ms: Option<u64>,
     },
     /// Partial transcription delta from the Realtime API
     RealtimeDelta { delta: String },
-    /// Completed transcription from Whisper fallback
+    /// Parked: completed transcription from whisper-1 REST fallback. See
+    /// INCIDENTS.md for the monitoring plan that may revive this.
+    #[allow(dead_code)]
     FallbackCompleted {
         item_id: String,
         transcript: String,
-        /// Speech duration in milliseconds (from VAD: audio_end_ms - audio_start_ms)
         duration_ms: Option<u64>,
     },
     /// New WebSocket session — clear ordering/completion state
@@ -80,10 +70,19 @@ pub enum MetricsEvent {
     ReconnectionAttempt,
     AudioChunkSent,
     RealtimeTranscription,
+    // Parked fallback variants — kept so the whisper-1 REST fallback can be
+    // revived without re-defining the enum. See INCIDENTS.md.
+    #[allow(dead_code)]
     Timeout,
+    #[allow(dead_code)]
     FallbackSuccess,
-    FallbackFailure { duration_ms: u64 },
+    #[allow(dead_code)]
+    FallbackFailure {
+        duration_ms: u64,
+    },
+    #[allow(dead_code)]
     FallbackRace,
+    #[allow(dead_code)]
     ShortSegmentSkipped,
     DuplicateFiltered,
     ContentFiltered,

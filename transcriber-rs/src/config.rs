@@ -7,30 +7,25 @@ use clap::Parser;
 #[derive(Parser, Debug, Clone)]
 #[command(
     name = "transcribe",
-    about = "Real-time audio transcription with OpenAI API",
+    about = "Real-time audio transcription with OpenAI's gpt-realtime-whisper",
     after_help = "\
-Available models (GA Realtime API):
-  gpt-realtime-whisper    Whisper streaming with local VAD + manual commits (default)
-  gpt-4o-transcribe       GPT-4o transcription (server VAD, no commits needed)
-  gpt-4o-mini-transcribe  GPT-4o mini transcription (cheapest)
+Transcription uses gpt-realtime-whisper (the only supported model). Local
+Silero VAD endpoints utterances since the server rejects turn_detection
+for this model.
 
-Local VAD endpoints whisper utterances since the server rejects turn_detection
-for that model. delay only applies to whisper; ignored for other models.
+The --delay flag controls server-side latency/accuracy tradeoff:
+  minimal | low | medium | high | xhigh
+
+Higher delay = more audio context per inference = more accurate but laggy.
+Default is `high` to avoid dropping sentence-initial words.
 
 Examples:
-  transcribe                              # gpt-realtime-whisper, delay=high
-  transcribe --delay medium               # Snappier feel, may drop sentence-initial words
-  transcribe --model gpt-4o-transcribe    # Old behavior (server VAD)
-  transcribe --allow-bye-thank-you        # Disable hallucination filtering"
+  transcribe                          # delay=high
+  transcribe --delay medium           # Snappier feel
+  transcribe --allow-bye-thank-you    # Disable hallucination filtering"
 )]
 pub struct Config {
-    /// Transcription model to use
-    #[arg(short = 'm', long, default_value = "gpt-realtime-whisper",
-           value_parser = ["gpt-realtime-whisper", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"])]
-    pub model: String,
-
     /// Latency/accuracy tradeoff for gpt-realtime-whisper (higher = more accurate, more lag).
-    /// "high" default: prioritizes not dropping sentence-initial words over snappy feel.
     #[arg(long, default_value = "high",
            value_parser = ["minimal", "low", "medium", "high", "xhigh"])]
     pub delay: String,

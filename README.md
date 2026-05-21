@@ -98,14 +98,14 @@ Run the binary from the project root (so it can find `filters.yaml` and `.env`):
 ./transcriber-rs/target/release/transcriber
 ```
 
-### Model and latency
+### Latency / accuracy
 
-The default model is `gpt-realtime-whisper` — OpenAI's streaming Whisper
-variant available via the GA Realtime API. It pairs with local Silero VAD
-to endpoint utterances (the API doesn't support server VAD for this model).
+Transcription uses OpenAI's `gpt-realtime-whisper` — the streaming Whisper
+variant in the GA Realtime API. It pairs with local Silero VAD to endpoint
+utterances (the API rejects server-side VAD for this model).
 
 ```bash
-# Default — gpt-realtime-whisper with delay=high
+# Default — delay=high (most accurate)
 ./transcriber-rs/target/release/transcriber
 
 # Snappier feel; slightly lower accuracy at sentence starts
@@ -114,11 +114,7 @@ to endpoint utterances (the API doesn't support server VAD for this model).
 
 `--delay` controls a server-side latency/accuracy tradeoff (`minimal`,
 `low`, `medium`, `high`, `xhigh`). Higher = more audio buffered before
-emission = more accurate, less snappy. Default is `high`.
-
-`gpt-4o-transcribe` and `gpt-4o-mini-transcribe` are still accepted as
-`--model` values but combine poorly with the local-VAD architecture —
-they'd double-VAD with the server. Treat as legacy.
+emission = more accurate, more lag. Default is `high`.
 
 ### Automatic Filtering
 

@@ -388,7 +388,12 @@ pub async fn run_audio_router_task(
                                 now.duration_since(last),
                                 ms,
                             );
-                            ws_cmd_tx.send(WsCommand::Commit).await.ok();
+                            // No reliable speech duration here — mute/unmute
+                            // mid-utterance; just send None.
+                            ws_cmd_tx
+                                .send(WsCommand::Commit { utterance_duration_ms: None })
+                                .await
+                                .ok();
                             vad.reset_after_commit();
                         }
                         vad.prefix_buf.clear();
@@ -448,14 +453,30 @@ pub async fn run_audio_router_task(
                             if vad.bytes_since_commit >= MIN_COMMIT_BYTES {
                                 let ms = (vad.bytes_since_commit * 1000)
                                     / (SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64);
+                                // Approximate speech duration: elapsed since
+                                // we declared start minus the hysteresis wait
+                                // (we declared start SPEECH_START_FRAMES late,
+                                // declared stop SILENCE_STOP_FRAMES late after
+                                // speech actually ended).
+                                let hysteresis_ms = ((SILENCE_STOP_FRAMES - SPEECH_START_FRAMES) as u64) * 32;
+                                let utterance_duration_ms = vad.speech_start_instant.map(|t| {
+                                    let elapsed = std::time::Instant::now()
+                                        .duration_since(t)
+                                        .as_millis() as u64;
+                                    elapsed.saturating_sub(hysteresis_ms)
+                                });
                                 info!(
-                                    "Silero VAD: speech stopped, committing ({ms}ms of audio; peak_p={:.3}, peak_silence={} of {} required, silence_streaks_broken={})",
+                                    "Silero VAD: speech stopped, committing ({ms}ms buffer / ~{}ms speech; peak_p={:.3}, peak_silence={} of {} required, silence_streaks_broken={})",
+                                    utterance_duration_ms.unwrap_or(0),
                                     peak_prob,
                                     vad.peak_silence_in_burst,
                                     SILENCE_STOP_FRAMES,
                                     vad.silence_streaks_broken,
                                 );
-                                ws_cmd_tx.send(WsCommand::Commit).await.ok();
+                                ws_cmd_tx
+                                    .send(WsCommand::Commit { utterance_duration_ms })
+                                    .await
+                                    .ok();
                                 vad.reset_after_commit();
                             } else {
                                 debug!(
@@ -489,7 +510,15 @@ pub async fn run_audio_router_task(
                     let ms = (vad.bytes_since_commit * 1000)
                         / (SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64);
                     info!("Max-buffer safety commit triggered ({ms}ms uncommitted)");
-                    ws_cmd_tx.send(WsCommand::Commit).await.ok();
+                    // We're mid-utterance — use elapsed since speech_started
+                    // (if known) as a rough duration estimate.
+                    let utterance_duration_ms = vad.speech_start_instant.map(|t| {
+                        std::time::Instant::now().duration_since(t).as_millis() as u64
+                    });
+                    ws_cmd_tx
+                        .send(WsCommand::Commit { utterance_duration_ms })
+                        .await
+                        .ok();
                     vad.reset_after_commit();
                 }
             }
@@ -501,9 +530,6 @@ pub async fn run_audio_router_task(
                         vad = VadState::new();
                         debug!("Session reset: VAD state cleared");
                     }
-                    // Server-side speech events are no-ops in the local-VAD
-                    // architecture; whisper doesn't emit them anyway.
-                    _ => {}
                 }
             }
         }

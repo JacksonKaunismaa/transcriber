@@ -53,10 +53,6 @@ struct ServerEvent {
     #[serde(default)]
     item_id: Option<String>,
     #[serde(default)]
-    audio_start_ms: Option<u64>,
-    #[serde(default)]
-    audio_end_ms: Option<u64>,
-    #[serde(default)]
     transcript: Option<String>,
     #[serde(default)]
     delta: Option<String>,
@@ -110,7 +106,6 @@ pub enum ConnectionResult {
 /// 4. Returns when disconnected (caller decides whether to reconnect)
 pub async fn run_connection(
     api_key: &str,
-    model: &str,
     delay: &str,
     ws_cmd_rx: &mut mpsc::Receiver<WsCommand>,
     audio_event_tx: &mpsc::Sender<AudioEvent>,
@@ -120,7 +115,6 @@ pub async fn run_connection(
 ) -> ConnectionResult {
     match do_connection(
         api_key,
-        model,
         delay,
         ws_cmd_rx,
         audio_event_tx,
@@ -151,9 +145,10 @@ pub async fn run_connection(
     }
 }
 
+const MODEL: &str = "gpt-realtime-whisper";
+
 async fn do_connection(
     api_key: &str,
-    model: &str,
     delay: &str,
     ws_cmd_rx: &mut mpsc::Receiver<WsCommand>,
     audio_event_tx: &mpsc::Sender<AudioEvent>,
@@ -184,7 +179,13 @@ async fn do_connection(
     .map_err(|_| anyhow::anyhow!("WebSocket connection timed out after 10s"))??;
     let (mut ws_write, mut ws_read) = ws_stream.split();
     let mut item_created_at: HashMap<String, std::time::Instant> = HashMap::new();
-    let mut speech_durations: HashMap<String, SpeechDuration> = HashMap::new();
+    // FIFO of utterance durations measured by local VAD, waiting to be
+    // attached to the next `.completed` event from the server. The server
+    // assigns item_ids only after we commit, so we can't pre-associate
+    // duration with item_id — we rely on ordering (commits and completions
+    // arrive in the same order).
+    let mut pending_durations: std::collections::VecDeque<Option<u64>> =
+        std::collections::VecDeque::new();
 
     // Drain stale audio commands from previous connection
     let mut drained = 0;
@@ -201,16 +202,14 @@ async fn do_connection(
     // Notify transcript task to clear ordering/completion state
     transcript_tx.send(TranscriptEvent::SessionReset).await.ok();
     item_created_at.clear();
-    speech_durations.clear();
+    pending_durations.clear();
     println!(
-        "[INFO] WebSocket connection established (transcription mode, model: {model})"
+        "[INFO] WebSocket connection established (transcription mode, model: {MODEL})"
     );
 
     // Send session config (GA shape: type:"session.update", session.type:"transcription",
-    // audio.input.transcription.model). The `delay` field is whisper-only — the server
-    // rejects it for gpt-4o-transcribe models. With manual commits there's no
-    // turn_detection to set; whisper requires turn_detection=null anyway.
-    let delay_field = (model == "gpt-realtime-whisper").then(|| delay.to_string());
+    // audio.input.transcription.model). Whisper rejects turn_detection so the
+    // client must endpoint with local VAD + manual commits.
     let session_update = SessionUpdate {
         r#type: "session.update",
         session: SessionConfig {
@@ -218,8 +217,8 @@ async fn do_connection(
             audio: AudioConfig {
                 input: AudioInput {
                     transcription: InputAudioTranscription {
-                        model: model.to_string(),
-                        delay: delay_field.clone(),
+                        model: MODEL.to_string(),
+                        delay: Some(delay.to_string()),
                     },
                 },
             },
@@ -228,10 +227,7 @@ async fn do_connection(
     ws_write
         .send(Message::Text(serde_json::to_string(&session_update)?.into()))
         .await?;
-    match &delay_field {
-        Some(d) => info!("Transcription session config sent (model: {model}, delay: {d})"),
-        None => info!("Transcription session config sent (model: {model})"),
-    }
+    info!("Transcription session config sent (model: {MODEL}, delay: {delay})");
 
     // Ping keepalive with pong timeout
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(5));
@@ -285,9 +281,13 @@ async fn do_connection(
                             break;
                         }
                     }
-                    Some(WsCommand::Commit) => {
+                    Some(WsCommand::Commit { utterance_duration_ms }) => {
                         // Trigger transcription of everything appended since the
                         // last commit. Server emits .completed after this fires.
+                        // We track the duration here so the next .completed can
+                        // be attached to it (FIFO ordering of commits and
+                        // completions guarantees correctness).
+                        pending_durations.push_back(utterance_duration_ms);
                         if let Err(e) = ws_write
                             .send(Message::Text(r#"{"type":"input_audio_buffer.commit"}"#.into()))
                             .await
@@ -315,11 +315,10 @@ async fn do_connection(
                         }
                         let event_result = handle_server_event(
                             &text,
-                            audio_event_tx,
                             transcript_tx,
                             metrics_tx,
                             &mut item_created_at,
-                            &mut speech_durations,
+                            &mut pending_durations,
                         ).await;
 
                         match event_result {
@@ -389,28 +388,12 @@ enum EventAction {
     Error { code: String, message: String },
 }
 
-/// Speech timing from VAD events, tracked per item_id.
-struct SpeechDuration {
-    start_ms: Option<u64>,
-    end_ms: Option<u64>,
-}
-
-impl SpeechDuration {
-    fn duration_ms(&self) -> Option<u64> {
-        match (self.start_ms, self.end_ms) {
-            (Some(s), Some(e)) if e > s => Some(e - s),
-            _ => None,
-        }
-    }
-}
-
 async fn handle_server_event(
     text: &str,
-    audio_event_tx: &mpsc::Sender<AudioEvent>,
     transcript_tx: &mpsc::Sender<TranscriptEvent>,
     metrics_tx: &mpsc::Sender<MetricsEvent>,
     item_created_at: &mut HashMap<String, std::time::Instant>,
-    speech_durations: &mut HashMap<String, SpeechDuration>,
+    pending_durations: &mut std::collections::VecDeque<Option<u64>>,
 ) -> EventAction {
     let event: ServerEvent = match serde_json::from_str(text) {
         Ok(e) => e,
@@ -444,43 +427,6 @@ async fn handle_server_event(
             EventAction::Continue
         }
 
-        "input_audio_buffer.speech_started" => {
-            if let Some(item_id) = &event.item_id {
-                let start_ms = event.audio_start_ms.unwrap_or(0);
-                info!("Speech started: item_id={item_id} audio_start_ms={start_ms}");
-                speech_durations.insert(item_id.clone(), SpeechDuration {
-                    start_ms: Some(start_ms),
-                    end_ms: None,
-                });
-                audio_event_tx
-                    .send(AudioEvent::SpeechStarted {
-                        item_id: item_id.clone(),
-                        audio_start_ms: start_ms,
-                    })
-                    .await
-                    .ok();
-            }
-            EventAction::Continue
-        }
-
-        "input_audio_buffer.speech_stopped" => {
-            if let Some(item_id) = &event.item_id {
-                let end_ms = event.audio_end_ms.unwrap_or(0);
-                info!("Speech stopped: item_id={item_id} audio_end_ms={end_ms}");
-                if let Some(dur) = speech_durations.get_mut(item_id) {
-                    dur.end_ms = Some(end_ms);
-                }
-                audio_event_tx
-                    .send(AudioEvent::SpeechStopped {
-                        item_id: item_id.clone(),
-                        audio_end_ms: end_ms,
-                    })
-                    .await
-                    .ok();
-            }
-            EventAction::Continue
-        }
-
         "conversation.item.input_audio_transcription.completed"
         | "response.audio_transcript.done" => {
             metrics_tx
@@ -491,6 +437,9 @@ async fn handle_server_event(
             if event.item_id.is_none() && !transcript.is_empty() {
                 info!("Realtime transcription: {transcript} [item_id=unknown]");
             }
+            // Pop next pending duration (FIFO with commit order — see
+            // pending_durations comment in do_connection).
+            let duration_ms = pending_durations.pop_front().flatten();
             if let Some(item_id) = &event.item_id {
                 if let Some(created) = item_created_at.remove(item_id) {
                     let rtt_ms = created.elapsed().as_millis() as u64;
@@ -499,16 +448,6 @@ async fn handle_server_event(
                         millis: rtt_ms,
                     }).await.ok();
                 }
-                // Cancel pending fallback timer in audio_buffer
-                audio_event_tx
-                    .send(AudioEvent::ItemCompleted {
-                        item_id: item_id.clone(),
-                    })
-                    .await
-                    .ok();
-                let duration_ms = speech_durations
-                    .remove(item_id)
-                    .and_then(|d| d.duration_ms());
                 if !transcript.is_empty() {
                     info!("Realtime transcription: {transcript} [item_id={item_id}]");
                 }

@@ -48,7 +48,6 @@ const REBUILD_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 fn try_build_stream(
     host: &cpal::Host,
     tx: &mpsc::Sender<AudioChunk>,
-    start_time: std::time::Instant,
     error_count: &Arc<AtomicU64>,
 ) -> Option<(cpal::Stream, String)> {
     let configs_to_try = [
@@ -97,15 +96,12 @@ fn try_build_stream(
 
         for config in &configs_to_try {
             let tx_clone = tx.clone();
-            let start = start_time;
             let err_count = Arc::clone(error_count);
 
             match device.build_input_stream(
                 config,
                 move |data: &[i16], _info: &cpal::InputCallbackInfo| {
-                    let timestamp_ms = start.elapsed().as_millis() as u64;
                     let chunk = AudioChunk {
-                        timestamp_ms,
                         data: data.to_vec(),
                     };
                     let _ = tx_clone.try_send(chunk);
@@ -144,7 +140,6 @@ pub fn start_audio_capture(
 ) -> anyhow::Result<()> {
     std::thread::spawn(move || {
         let host = cpal::default_host();
-        let start_time = std::time::Instant::now();
         let error_count = Arc::new(AtomicU64::new(0));
         let mut consecutive_rebuilds: u32 = 0;
 
@@ -157,7 +152,7 @@ pub fn start_audio_capture(
             error_count.store(0, Ordering::Relaxed);
 
             let Some((stream, device_name)) =
-                try_build_stream(&host, &tx, start_time, &error_count)
+                try_build_stream(&host, &tx, &error_count)
             else {
                 consecutive_rebuilds += 1;
                 if consecutive_rebuilds > MAX_REBUILDS {
