@@ -7,13 +7,16 @@ A real-time audio transcription tool that captures your microphone input, transc
 This tool is built for people who use AI assistants heavily and want to talk to them instead of type. The priorities are:
 
 - **Simple** - One command to start, works with any application
-- **Cheap** - Transcription costs ~$0.006/minute using the Whisper API
+- **Cheap** - Local Silero VAD gates audio to OpenAI, so you only pay for
+  detected-speech minutes (not mic-on minutes). At $0.017/min for
+  `gpt-realtime-whisper`, typical dictation runs well under $1/hr of usage.
 - **Open source** - No vendor lock-in, easy to modify
 - **Reliable enough** - You shouldn't have to repeat yourself, but we don't obsess over perfect transcription accuracy. AI assistants can understand you even when the transcript is rough, so 95% accuracy is fine.
 
 ## Features
 
-- **Real-time transcription** using OpenAI's GPT-4 Realtime API
+- **Real-time transcription** using OpenAI's `gpt-realtime-whisper` (streaming Whisper)
+- **Local Silero VAD** - utterance-aware sending; only billed for detected speech
 - **Automatic typing** into any active window (works everywhere!)
 - **Smart filtering** removes hallucinations, filler words, and non-ASCII characters by default
 - **Hot-reload filters** - edit `filters.yaml` while running, no restart needed
@@ -95,25 +98,27 @@ Run the binary from the project root (so it can find `filters.yaml` and `.env`):
 ./transcriber-rs/target/release/transcriber
 ```
 
-### Model Selection
+### Model and latency
 
-The tool supports three transcription models. Use the `--model` or `-m` flag to select:
+The default model is `gpt-realtime-whisper` — OpenAI's streaming Whisper
+variant available via the GA Realtime API. It pairs with local Silero VAD
+to endpoint utterances (the API doesn't support server VAD for this model).
 
 ```bash
-# Default: Whisper (most accurate)
+# Default — gpt-realtime-whisper with delay=high
 ./transcriber-rs/target/release/transcriber
 
-# GPT-4o transcription (fast, high quality)
-./transcriber-rs/target/release/transcriber --model gpt-4o-transcribe
-
-# GPT-4o mini (faster, lower cost)
-./transcriber-rs/target/release/transcriber -m gpt-4o-mini-transcribe
+# Snappier feel; slightly lower accuracy at sentence starts
+./transcriber-rs/target/release/transcriber --delay low
 ```
 
-**Available models:**
-- `whisper-1` (default) - Most accurate Whisper transcription model
-- `gpt-4o-transcribe` - Fast, high-quality GPT-4o-based transcription
-- `gpt-4o-mini-transcribe` - Faster, lower-cost alternative
+`--delay` controls a server-side latency/accuracy tradeoff (`minimal`,
+`low`, `medium`, `high`, `xhigh`). Higher = more audio buffered before
+emission = more accurate, less snappy. Default is `high`.
+
+`gpt-4o-transcribe` and `gpt-4o-mini-transcribe` are still accepted as
+`--model` values but combine poorly with the local-VAD architecture —
+they'd double-VAD with the server. Treat as legacy.
 
 ### Automatic Filtering
 
@@ -226,6 +231,25 @@ This adds a TranscriberStatus widget to your bar:
 Restart Quickshell after installing: `qs reload`
 
 ## How It Works
+
+### Voice Activity Detection
+
+`gpt-realtime-whisper` doesn't support server-side VAD (the server rejects
+`turn_detection` for that model), so the client has to endpoint utterances
+itself. The transcriber runs the [Silero VAD](https://github.com/snakers4/silero-vad)
+model locally on each 32ms audio frame:
+
+- **Audio is gated by VAD state.** Bytes only flow to OpenAI while Silero
+  says we're in speech. Silent periods are buffered in a 1-second rolling
+  prefix that gets flushed when speech starts, so sentence-initial words
+  aren't clipped.
+- **Hysteresis** prevents flicker: 3 consecutive speech frames (96ms)
+  declare speech started; 30 consecutive silence frames (960ms) declare
+  it stopped and trigger an `input_audio_buffer.commit`.
+- **Diagnostics** are logged into the JSONL — per-second heartbeats with
+  silence-counter, min/max probability, and `peak_silence_in_burst` —
+  so if a missed utterance ever happens, the cause (silero borderline,
+  threshold too high, etc.) is recoverable from the log.
 
 ### Keyboard Automation
 
