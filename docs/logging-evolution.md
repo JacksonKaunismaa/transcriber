@@ -281,7 +281,7 @@ The switch from UTC to local time happened in commit `e246e66` (Mar 9, 2026) via
 
 ---
 
-## METRICS Line Evolution (3 versions)
+## METRICS Line Evolution (5 versions)
 
 ### Version 1: Python (Dec 2025 -- Feb 2026)
 
@@ -310,13 +310,30 @@ METRICS [1m] | rss:28MB | ping p50:122ms p95:122ms | rtt p50:826ms p95:2156ms | 
 
 Added `ping p50/p95` and `rtt p50/p95` percentile tracking (last 100 samples each). Shows `-` when no data available yet.
 
-### Version 4: EMA latency (Apr 14, 2026 -- present)
+### Version 4: EMA latency (Apr 14, 2026 -- May 21, 2026)
 
 ```
 METRICS [1m] | rss:34MB | ping ema:126ms | rtt ema:675ms | 5m: rt:3 to:0 (100%) fb:0/0 filt:1 | 15m: ... | 1h: ... | all: ... | races:0 dupes:0 short_skip:0 | conn:1/1 expires:0 reconnects:0 | errors: ws=0 api=0
 ```
 
 Replaced p50/p95 percentiles (computed over last 100 samples in a ring buffer) with time-decayed exponential moving averages (60s half-life). EMA decays toward zero during silence instead of staying frozen at the last value. Health check now uses only ping EMA > 400ms for "degraded" — transcription RTT is logged for diagnostics but doesn't affect health (it's dominated by OpenAI server-side processing, not network latency). Ping interval reduced from 20s to 5s.
+
+### Version 5: Post-fallback removal (May 21, 2026 -- present)
+
+```
+METRICS [1m] | rss:72MB | ping ema:102ms | rtt ema:0ms | 5m: rt:5 filt:1 | 15m: rt:5 filt:1 | 1h: rt:5 filt:1 | all: rt:5 filt:1 | dupes:0 | conn:1/1 expires:0 reconnects:0 | errors: ws=0 api=0
+```
+
+Dropped the whisper-1 REST fallback path (commit `c25a0d4`) so the
+fallback-related fields no longer mean anything:
+
+- Removed per-window: `to:N (X%)` (timeout count + success %), `fb:X/Y` (fallback success/total)
+- Removed from tail: `races:N`, `short_skip:N`
+- Health check no longer uses recent success/fail rate (which was 0/0
+  with no failures recorded); just connection state + ping EMA.
+
+The parked fallback `MetricsEvent` variants are kept as no-ops so they
+can be re-wired if the fallback is revived (see `INCIDENTS.md`).
 
 ### METRICS Field Reference
 
@@ -329,16 +346,16 @@ Replaced p50/p95 percentiles (computed over last 100 samples in a ring buffer) w
 | `ping ema` | Ping RTT exponential moving average (ms, 60s half-life) | v4 |
 | `rtt ema` | Transcription RTT EMA (ms, 60s half-life, diagnostic only) | v4 |
 | `rt` | Realtime API transcription count (per window) | v2 |
-| `to` | Timeout count + success % (per window) | v2 |
-| `fb` | Fallback ok / total (per window) | v2 |
+| `to` | Timeout count + success % (per window) | v2 (removed in v5) |
+| `fb` | Fallback ok / total (per window) | v2 (removed in v5) |
 | `filt` | Content filtered count (per window) | v2 |
 | `realtime` | Cumulative realtime count | v1 (removed in v2, replaced by windowed) |
 | `timeouts` | Cumulative timeout count + % | v1 (removed in v2) |
 | `fallback_ok` | Cumulative fallback successes | v1 (removed in v2) |
 | `fail_short` / `fail_long` | Fallback failures by duration | v1 (removed in v2) |
-| `races` | Fallback race conditions prevented | v1 |
+| `races` | Fallback race conditions prevented | v1 (removed in v5) |
 | `dupes` | Fuzzy duplicates filtered | v1 |
-| `short_skip` | Short segments skipped | v2 |
+| `short_skip` | Short segments skipped | v2 (removed in v5) |
 | `conn:X/Y` | Successful / attempted connections | v2 |
 | `expires` | Session expirations | v2 |
 | `reconnects` | Reconnection attempts | v2 |

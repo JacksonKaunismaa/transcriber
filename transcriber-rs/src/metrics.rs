@@ -12,35 +12,19 @@ use crate::messages::MetricsEvent;
 #[derive(Clone, Copy)]
 enum Outcome {
     Realtime,
-    Timeout,
-    FallbackOk,
-    FallbackFail,
     Filtered,
 }
 
 /// Aggregated counts for a time window.
 struct WindowCounts {
     realtime: u64,
-    timeouts: u64,
-    fallback_ok: u64,
-    fallback_fail: u64,
     filtered: u64,
 }
 
 impl WindowCounts {
-    /// Format as a compact string: `rt:12 to:3 (80%) fb:1/4 filt:0`
+    /// Format as a compact string: `rt:12 filt:0`
     fn format(&self) -> String {
-        let total = self.realtime + self.timeouts;
-        let ok_pct = if total > 0 {
-            (100 * self.realtime) as f64 / total as f64
-        } else {
-            0.0
-        };
-        let fb_total = self.fallback_ok + self.fallback_fail;
-        format!(
-            "rt:{} to:{} ({:.0}%) fb:{}/{} filt:{}",
-            self.realtime, self.timeouts, ok_pct, self.fallback_ok, fb_total, self.filtered,
-        )
+        format!("rt:{} filt:{}", self.realtime, self.filtered)
     }
 }
 
@@ -68,46 +52,16 @@ impl RecentWindow {
         }
     }
 
-    /// Count outcomes from the last `n` events (most recent first).
-    fn last_n(&self, n: usize) -> WindowCounts {
-        let mut c = WindowCounts {
-            realtime: 0,
-            timeouts: 0,
-            fallback_ok: 0,
-            fallback_fail: 0,
-            filtered: 0,
-        };
-        for (_, outcome) in self.events.iter().rev().take(n) {
-            match outcome {
-                Outcome::Realtime => c.realtime += 1,
-                Outcome::Timeout => c.timeouts += 1,
-                Outcome::FallbackOk => c.fallback_ok += 1,
-                Outcome::FallbackFail => c.fallback_fail += 1,
-                Outcome::Filtered => c.filtered += 1,
-            }
-        }
-        c
-    }
-
     /// Count outcomes within the last `window` duration.
     fn counts(&self, window: Duration) -> WindowCounts {
         let cutoff = Instant::now() - window;
-        let mut c = WindowCounts {
-            realtime: 0,
-            timeouts: 0,
-            fallback_ok: 0,
-            fallback_fail: 0,
-            filtered: 0,
-        };
+        let mut c = WindowCounts { realtime: 0, filtered: 0 };
         for (t, outcome) in self.events.iter().rev() {
             if *t < cutoff {
                 break;
             }
             match outcome {
                 Outcome::Realtime => c.realtime += 1,
-                Outcome::Timeout => c.timeouts += 1,
-                Outcome::FallbackOk => c.fallback_ok += 1,
-                Outcome::FallbackFail => c.fallback_fail += 1,
                 Outcome::Filtered => c.filtered += 1,
             }
         }
@@ -171,12 +125,6 @@ struct Metrics {
     session_expirations: u64,
     reconnection_attempts: u64,
     realtime_transcriptions: u64,
-    timeouts: u64,
-    fallback_successes: u64,
-    fallback_failures_short: u64,
-    fallback_failures_long: u64,
-    fallback_races: u64,
-    short_segments_skipped: u64,
     duplicates_filtered: u64,
     content_filtered: u64,
     websocket_errors: u64,
@@ -197,12 +145,6 @@ impl Metrics {
             session_expirations: 0,
             reconnection_attempts: 0,
             realtime_transcriptions: 0,
-            timeouts: 0,
-            fallback_successes: 0,
-            fallback_failures_short: 0,
-            fallback_failures_long: 0,
-            fallback_races: 0,
-            short_segments_skipped: 0,
             duplicates_filtered: 0,
             content_filtered: 0,
             websocket_errors: 0,
@@ -236,27 +178,14 @@ impl Metrics {
                 self.recent.push(Outcome::Realtime);
                 self.update_health();
             }
-            MetricsEvent::Timeout => {
-                self.timeouts += 1;
-                self.recent.push(Outcome::Timeout);
-                self.update_health();
-            }
-            MetricsEvent::FallbackSuccess => {
-                self.fallback_successes += 1;
-                self.recent.push(Outcome::FallbackOk);
-                self.update_health();
-            }
-            MetricsEvent::FallbackFailure { duration_ms } => {
-                if duration_ms >= 1000 {
-                    self.fallback_failures_long += 1;
-                } else {
-                    self.fallback_failures_short += 1;
-                }
-                self.recent.push(Outcome::FallbackFail);
-                self.update_health();
-            }
-            MetricsEvent::FallbackRace => self.fallback_races += 1,
-            MetricsEvent::ShortSegmentSkipped => self.short_segments_skipped += 1,
+            // Parked variants — kept as no-ops so the events can be sent
+            // again without compile errors if the fallback is revived.
+            // See messages.rs and INCIDENTS.md.
+            MetricsEvent::Timeout
+            | MetricsEvent::FallbackSuccess
+            | MetricsEvent::FallbackFailure { .. }
+            | MetricsEvent::FallbackRace
+            | MetricsEvent::ShortSegmentSkipped => {}
             MetricsEvent::DuplicateFiltered => self.duplicates_filtered += 1,
             MetricsEvent::ContentFiltered => {
                 self.content_filtered += 1;
@@ -301,25 +230,20 @@ impl Metrics {
         // All-time counts reuse the cumulative counters
         let wall = WindowCounts {
             realtime: self.realtime_transcriptions,
-            timeouts: self.timeouts,
-            fallback_ok: self.fallback_successes,
-            fallback_fail: self.fallback_failures_short + self.fallback_failures_long,
             filtered: self.content_filtered,
         };
 
         let stats = format!(
             "METRICS [{minutes}m] | rss:{rss_mb:.0}MB | {ping_stats} | {rtt_stats} | \
              5m: {w5m} | 15m: {w15m} | 1h: {w1h} | all: {wall} | \
-             races:{races} dupes:{dupes} short_skip:{ss} | \
+             dupes:{dupes} | \
              conn:{cs}/{ca} expires:{se} reconnects:{ra} | \
              errors: ws={we} api={ae}",
             w5m = w5m.format(),
             w15m = w15m.format(),
             w1h = w1h.format(),
             wall = wall.format(),
-            races = self.fallback_races,
             dupes = self.duplicates_filtered,
-            ss = self.short_segments_skipped,
             cs = self.connection_successes,
             ca = self.connection_attempts,
             se = self.session_expirations,
@@ -332,29 +256,16 @@ impl Metrics {
     }
 
     fn update_health(&mut self) {
+        // With local VAD + manual commits, the realtime path doesn't have a
+        // success/failure-rate signal anymore (every commit succeeds or the
+        // WS is dead). Health is driven purely by connection state and
+        // sustained latency.
         let health = if !self.connected {
             "error"
+        } else if self.is_latency_degraded() {
+            "degraded"
         } else {
-            let recent = self.recent.last_n(8);
-            let successes = recent.realtime + recent.fallback_ok;
-            let failures = recent.fallback_fail;
-            let total = successes + failures;
-            if total < 3 {
-                if self.is_latency_degraded() {
-                    "degraded"
-                } else {
-                    "ok"
-                }
-            } else {
-                let fail_rate = failures as f64 / total as f64;
-                if fail_rate > 0.5 {
-                    "error"
-                } else if fail_rate > 0.25 || self.is_latency_degraded() {
-                    "degraded"
-                } else {
-                    "ok"
-                }
-            }
+            "ok"
         };
         if health != self.last_health {
             self.last_health = health;
