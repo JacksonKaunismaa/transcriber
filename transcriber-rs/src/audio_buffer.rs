@@ -19,9 +19,12 @@ const SILERO_FRAME_16K: usize = 512;
 const SILERO_FRAME_24K: usize = (SAMPLE_RATE as usize * 32) / 1000; // 768
 
 /// Speech probability threshold. Anything above this counts as a speech frame
-/// for hysteresis purposes. Silero's outputs are well-calibrated; 0.5 is the
-/// commonly-recommended midpoint.
-const SPEECH_PROB_THRESHOLD: f32 = 0.5;
+/// for hysteresis purposes. Lowered from 0.5 (silero's recommended midpoint)
+/// to 0.4 on 2026-05-22 after two missed utterances where the heartbeat's
+/// peak probability sat at 0.48-0.49 — quiet/uncertain speech ("Hello?",
+/// "Can you commit this?" said softly) was just below threshold. See
+/// INCIDENTS.md → "Soft speech missed by Silero VAD".
+const SPEECH_PROB_THRESHOLD: f32 = 0.4;
 
 /// Speech start: 3 consecutive 32ms speech-verdicts = 96ms — quick enough to
 /// catch short utterances.
