@@ -57,6 +57,16 @@ const PREFIX_BUFFER_MS: u64 = 1000;
 const PREFIX_BUFFER_BYTES: usize =
     (SAMPLE_RATE as usize * BYTES_PER_SAMPLE as usize * PREFIX_BUFFER_MS as usize) / 1000;
 
+/// Rolling local buffer of recent audio, kept independent of VAD state. This
+/// is the storage layer the whisper-1 REST fallback would slice from if
+/// revived (see INCIDENTS.md). Keeping it filled now means that *if* the
+/// post-deploy monitoring shows the realtime path drops commits, we can wire
+/// up the REST fallback without retroactively losing audio.
+///
+/// 30s holds enough audio for any reasonable utterance (typical max is ~20s
+/// for the MAX_BUFFER_SECONDS safety commit) plus margin.
+const FALLBACK_BUFFER_SECONDS: u64 = 30;
+
 struct VadState {
     /// Silero model instance. Manages LSTM state across `predict()` calls.
     vad: VoiceActivityDetector,
@@ -80,6 +90,14 @@ struct VadState {
     /// the lead-in (consonants, first word) isn't lost — silero needs ~96ms
     /// to declare in_speech and we want the audio from BEFORE that point too.
     prefix_buf: VecDeque<u8>,
+    /// Rolling buffer of the most recent ~FALLBACK_BUFFER_SECONDS of audio,
+    /// timestamped per chunk. Filled regardless of VAD state. Currently
+    /// unused by any read path — kept ready in case the post-deploy
+    /// monitoring (INCIDENTS.md) shows we need to revive the whisper-1
+    /// REST fallback for commits that never get `.completed` back. Without
+    /// this, reviving the fallback would require retroactively re-capturing
+    /// audio that's already been dropped.
+    fallback_buf: VecDeque<(std::time::Instant, Vec<u8>)>,
 
     // ── Diagnostics for "why isn't speech_stopped firing?" ───────────────
     /// When the current speech burst started — for elapsed time in heartbeats.
@@ -128,6 +146,7 @@ impl VadState {
             sample_buf: Vec::with_capacity(SILERO_FRAME_24K * 2),
             last_chunk_at: None,
             prefix_buf: VecDeque::with_capacity(PREFIX_BUFFER_BYTES),
+            fallback_buf: VecDeque::new(),
             speech_start_instant: None,
             peak_silence_in_burst: 0,
             silence_streaks_broken: 0,
@@ -154,6 +173,21 @@ impl VadState {
         // Don't clear prefix_buf — we want to retain recent audio in case
         // a new utterance starts immediately after this commit. The rolling
         // cap will trim it naturally.
+    }
+
+    /// Append bytes to the rolling fallback buffer, evicting chunks older
+    /// than FALLBACK_BUFFER_SECONDS. No read path consumes this yet — see
+    /// the field doc.
+    fn push_fallback(&mut self, now: std::time::Instant, bytes: Vec<u8>) {
+        self.fallback_buf.push_back((now, bytes));
+        let cutoff = now - std::time::Duration::from_secs(FALLBACK_BUFFER_SECONDS);
+        while self
+            .fallback_buf
+            .front()
+            .is_some_and(|(t, _)| *t < cutoff)
+        {
+            self.fallback_buf.pop_front();
+        }
     }
 
     /// Append bytes to the rolling prefix buffer, evicting old samples to stay
@@ -406,6 +440,11 @@ pub async fn run_audio_router_task(
                 let bytes: Vec<u8> = chunk.data.iter()
                     .flat_map(|s| s.to_le_bytes())
                     .collect();
+
+                // Always push to the rolling fallback buffer (regardless of
+                // VAD state). Currently no read path consumes this — see
+                // VadState::fallback_buf for context.
+                vad.push_fallback(now, bytes.clone());
 
                 // Run VAD first so we know what state we're in for THIS chunk.
                 // (Transitions emitted here are based on the chunk's samples.)
