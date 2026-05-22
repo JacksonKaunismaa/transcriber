@@ -8,7 +8,6 @@ hallucinations:
   # Common false positives
   - pattern: '\bBye[\.!]?\s*'
     flags: ignorecase
-  - pattern: '\bThank you[\.!\?]?\s*'
   - pattern: 'Thank(?:s| you) for (?:joining|watching|listening|having|sharing|tuning in)\b.*?[\.!]\s*'
     flags: ignorecase
     comment: "Thank you/Thanks for joining/watching/listening/etc hallucinations"
