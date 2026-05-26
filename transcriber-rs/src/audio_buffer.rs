@@ -18,13 +18,19 @@ const SILERO_FRAME_16K: usize = 512;
 /// resampling to a single 512-sample silero frame at 16kHz.
 const SILERO_FRAME_24K: usize = (SAMPLE_RATE as usize * 32) / 1000; // 768
 
-/// Speech probability threshold. Anything above this counts as a speech frame
-/// for hysteresis purposes. Lowered from 0.5 (silero's recommended midpoint)
-/// to 0.4 on 2026-05-22 after two missed utterances where the heartbeat's
-/// peak probability sat at 0.48-0.49 — quiet/uncertain speech ("Hello?",
-/// "Can you commit this?" said softly) was just below threshold. See
-/// INCIDENTS.md → "Soft speech missed by Silero VAD".
-const SPEECH_PROB_THRESHOLD: f32 = 0.4;
+/// Start threshold: a frame with prob above this counts toward triggering
+/// `SpeechStarted`. Lowered from 0.5 → 0.4 on 2026-05-22 after misses with
+/// peak ~0.48-0.49. See INCIDENTS.md → "Soft speech missed by Silero VAD".
+const SPEECH_START_THRESHOLD: f32 = 0.4;
+
+/// Continue threshold (hysteresis): once `in_speech`, the silence counter
+/// only advances on frames with prob *below* this. Frames between
+/// START and CONTINUE are "neutral" and hold the current state — preventing
+/// brief mid-utterance dips into the 0.2-0.4 range from prematurely
+/// committing. This is the asymmetric scheme silero's own utilities use
+/// (parameter name `neg_threshold`), recommended at 0.15 alongside a 0.4
+/// start threshold for quiet-audio environments.
+const SPEECH_CONTINUE_THRESHOLD: f32 = 0.15;
 
 /// Speech start: 3 consecutive 32ms speech-verdicts = 96ms — quick enough to
 /// catch short utterances.
@@ -116,7 +122,7 @@ struct VadState {
     /// Per-second heartbeat window stats — reset every time we emit one.
     last_heartbeat_at: Option<std::time::Instant>,
     hb_frames: u32,
-    /// Frames with prob > SPEECH_PROB_THRESHOLD (0.5).
+    /// Frames with prob > SPEECH_START_THRESHOLD (0.4).
     hb_speech_frames: u32,
     /// Frames with prob > 0.2 (loose "almost speech" threshold) — helps
     /// distinguish "silero saw nothing" from "silero saw something marginal".
@@ -246,10 +252,19 @@ enum VadTransition {
 }
 
 fn step_vad(state: &mut VadState, prob: f32) -> Option<VadTransition> {
-    let is_speech_frame = prob > SPEECH_PROB_THRESHOLD;
+    // Three-zone classification with hysteresis:
+    //   prob > START      → speech frame (advances start counter, resets silence)
+    //   prob < CONTINUE   → silence frame (advances silence counter, resets speech-streak)
+    //   otherwise         → neutral (holds current state — does NOT advance silence,
+    //                       but does reset an in-progress start streak so a single
+    //                       neutral frame breaks pre-trigger speech accumulation)
+    let is_speech_frame = prob > SPEECH_START_THRESHOLD;
+    let is_silence_frame = prob < SPEECH_CONTINUE_THRESHOLD;
     let prev_consecutive_speech = state.consecutive_speech;
 
     // Heartbeat window stats (collected continuously, emitted periodically).
+    // `hb_speech_frames` stays anchored to the START threshold so the metric
+    // means the same thing regardless of in_speech state.
     state.hb_frames += 1;
     if is_speech_frame {
         state.hb_speech_frames += 1;
@@ -262,8 +277,8 @@ fn step_vad(state: &mut VadState, prob: f32) -> Option<VadTransition> {
 
     if is_speech_frame {
         // If we were accumulating silence, log when a substantial streak
-        // gets broken — that's the smoking gun for "silence wasn't quite
-        // silent enough to count" failures.
+        // gets broken — smoking gun for "silence wasn't quite silent
+        // enough to count" failures.
         if state.in_speech && state.consecutive_silence >= 5 {
             state.silence_streaks_broken += 1;
             debug!(
@@ -279,17 +294,22 @@ fn step_vad(state: &mut VadState, prob: f32) -> Option<VadTransition> {
         if state.consecutive_speech > state.hb_max_consecutive_speech {
             state.hb_max_consecutive_speech = state.consecutive_speech;
         }
-    } else {
-        // Speech streak ended without triggering start — count it as a
-        // "flicker" (silero saw transient speech-like signal but not
-        // sustained). High flicker counts during apparent silence suggest
-        // either lowering SPEECH_START_FRAMES or background noise issues.
+    } else if is_silence_frame {
         if !state.in_speech && prev_consecutive_speech > 0 {
             state.hb_speech_flickers += 1;
         }
         state.consecutive_silence += 1;
         if state.in_speech && state.consecutive_silence > state.peak_silence_in_burst {
             state.peak_silence_in_burst = state.consecutive_silence;
+        }
+        state.consecutive_speech = 0;
+    } else {
+        // Neutral zone (CONTINUE ≤ prob ≤ START): hold state.
+        // Don't increment silence — that's the hysteresis. Do break any
+        // pre-trigger speech streak so starts require true consecutive
+        // frames above the start threshold.
+        if !state.in_speech && prev_consecutive_speech > 0 {
+            state.hb_speech_flickers += 1;
         }
         state.consecutive_speech = 0;
     }
@@ -306,6 +326,10 @@ fn step_vad(state: &mut VadState, prob: f32) -> Option<VadTransition> {
         state.in_speech = false;
         let peak = state.peak_prob;
         state.peak_prob = 0.0;
+        // Reset silero's LSTM state at the utterance boundary so the next
+        // utterance starts with a clean hidden state. Matches Pipecat /
+        // LiveKit's pattern and mitigates documented v4 silence-bias drift.
+        state.vad.reset();
         return Some(VadTransition::SpeechStopped(peak));
     }
     None
