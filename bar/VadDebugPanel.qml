@@ -18,6 +18,7 @@ Scope {
     // Snapshot fields, updated each time the JSON file changes.
     property real currentProb: 0.0
     property bool inSpeech: false
+    property bool paused: false
     property int consecutiveSpeech: 0
     property int consecutiveSilence: 0
     property real startThreshold: 0.4
@@ -56,6 +57,7 @@ Scope {
                 const s = JSON.parse(this.text())
                 root.currentProb = s.current_prob
                 root.inSpeech = s.in_speech
+                root.paused = s.paused === true
                 root.consecutiveSpeech = s.consecutive_speech
                 root.consecutiveSilence = s.consecutive_silence
                 root.startThreshold = s.speech_start_threshold
@@ -120,10 +122,14 @@ Scope {
                         width: 70
                         height: 22
                         radius: 4
-                        color: root.inSpeech ? "#316340" : "#404048"
+                        color: root.paused ? "#6e3038"
+                             : root.inSpeech ? "#316340"
+                             : "#404048"
                         Text {
                             anchors.centerIn: parent
-                            text: root.inSpeech ? "IN SPEECH" : "IDLE"
+                            text: root.paused ? "MUTED"
+                                : root.inSpeech ? "IN SPEECH"
+                                : "IDLE"
                             color: "white"
                             font.pixelSize: 11
                             font.bold: true

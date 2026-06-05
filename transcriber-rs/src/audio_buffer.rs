@@ -442,6 +442,12 @@ pub async fn run_audio_router_task(
     let mut vad = VadState::new();
     info!("Silero VAD initialised");
 
+    // Keepalive for the VAD debug overlay: re-flush the snapshot file every
+    // 500ms while audio is paused so the widget doesn't think we've died.
+    // Skip behaviour avoids burst-firing if a chunk hog stalls the task.
+    let mut keepalive = tokio::time::interval(std::time::Duration::from_millis(500));
+    keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
@@ -455,6 +461,8 @@ pub async fn run_audio_router_task(
                 // Detect capture pause (mute/unmute). On resume:
                 //   - If we were mid-utterance with audio sent, commit it.
                 //   - Drop any prefix buffer from before the gap (stale).
+                //   - Clear the debug history so the sparkline doesn't render
+                //     a huge timestamp gap as a stretched flat line.
                 let now = std::time::Instant::now();
                 if let Some(last) = vad.last_chunk_at {
                     if now.duration_since(last) > PAUSE_GAP_THRESHOLD {
@@ -476,6 +484,7 @@ pub async fn run_audio_router_task(
                         }
                         vad.prefix_buf.clear();
                         vad.sample_buf.clear();
+                        vad.debug.clear_history();
                     }
                 }
                 vad.last_chunk_at = Some(now);
@@ -613,6 +622,22 @@ pub async fn run_audio_router_task(
                         vad = VadState::new();
                         debug!("Session reset: VAD state cleared");
                     }
+                }
+            }
+
+            _ = keepalive.tick() => {
+                // Refresh the debug snapshot if no chunks have arrived recently
+                // (mic muted, or capture stalled). Holds the widget visible.
+                let stale = vad.last_chunk_at
+                    .map(|t| std::time::Instant::now().duration_since(t)
+                        > std::time::Duration::from_millis(400))
+                    .unwrap_or(true);
+                if stale {
+                    vad.debug.flush_paused(
+                        vad.in_speech,
+                        vad.consecutive_speech,
+                        vad.consecutive_silence,
+                    );
                 }
             }
         }

@@ -35,6 +35,9 @@ struct Snapshot {
     current_prob: f32,
     consecutive_speech: u32,
     consecutive_silence: u32,
+    /// True when audio capture is paused (mic mute) — widget renders a
+    /// muted indicator and lets the sparkline freeze.
+    paused: bool,
     /// (ms_since_writer_start, probability), oldest first.
     history: Vec<(u64, f32)>,
 }
@@ -97,7 +100,34 @@ impl VadDebugWriter {
             return;
         }
         self.frames_since_flush = 0;
+        self.write(in_speech, consecutive_speech, consecutive_silence, false);
+    }
 
+    /// Force a snapshot write tagged paused=true. Used by a keepalive timer
+    /// during mute so the widget doesn't think the transcriber crashed. Does
+    /// not touch the history ring buffer — the sparkline freezes naturally.
+    pub fn flush_paused(
+        &mut self,
+        in_speech: bool,
+        consecutive_speech: u32,
+        consecutive_silence: u32,
+    ) {
+        self.write(in_speech, consecutive_speech, consecutive_silence, true);
+    }
+
+    /// Drop the history ring buffer. Use on resume after a capture gap so
+    /// stale timestamps don't distort the sparkline x-axis.
+    pub fn clear_history(&mut self) {
+        self.history.clear();
+    }
+
+    fn write(
+        &mut self,
+        in_speech: bool,
+        consecutive_speech: u32,
+        consecutive_silence: u32,
+        paused: bool,
+    ) {
         let written_at_unix_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
@@ -113,6 +143,7 @@ impl VadDebugWriter {
             current_prob: self.last_prob,
             consecutive_speech,
             consecutive_silence,
+            paused,
             history: self.history.iter().copied().collect(),
         };
 
