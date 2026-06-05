@@ -66,7 +66,11 @@ Scope {
                 root.silenceStopFrames = s.silence_stop_frames
                 root.history = s.history
                 root.writtenAtUnixMs = s.written_at_unix_ms
-                root.snapshotFresh = true
+                // Compute freshness from the snapshot's own timestamp — the
+                // file may still exist as garbage from a previously-crashed
+                // transcriber. The 1s timer below also re-checks staleness.
+                const ageMs = Date.now() - s.written_at_unix_ms
+                root.snapshotFresh = s.written_at_unix_ms > 0 && ageMs < 2000
                 sparkline.requestPaint()
             } catch (e) {
                 // Mid-rename partial read — next reload event will retry.
