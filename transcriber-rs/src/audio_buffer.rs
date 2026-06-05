@@ -137,26 +137,24 @@ struct VadState {
     /// triggering. High count = silero seeing intermittent speech-like signal.
     hb_speech_flickers: u32,
 
-    /// Optional live-snapshot writer for the Quickshell debug overlay.
-    /// Some(_) iff `--debug-vad` was passed at startup.
-    debug: Option<crate::vad_debug::VadDebugWriter>,
+    /// Live-snapshot writer for the Quickshell debug overlay. Always on —
+    /// writes are ~30 KB/s to a tmpfs path under $XDG_RUNTIME_DIR.
+    debug: crate::vad_debug::VadDebugWriter,
 }
 
 impl VadState {
-    fn new(debug_vad: bool) -> Self {
+    fn new() -> Self {
         let vad = VoiceActivityDetector::builder()
             .sample_rate(16000)
             .chunk_size(SILERO_FRAME_16K)
             .build()
             .expect("Silero VAD initialisation failed — model bundled with the crate, should not fail");
-        let debug = debug_vad.then(|| {
-            crate::vad_debug::VadDebugWriter::new(
-                SPEECH_START_THRESHOLD,
-                SPEECH_CONTINUE_THRESHOLD,
-                SPEECH_START_FRAMES,
-                SILENCE_STOP_FRAMES,
-            )
-        });
+        let debug = crate::vad_debug::VadDebugWriter::new(
+            SPEECH_START_THRESHOLD,
+            SPEECH_CONTINUE_THRESHOLD,
+            SPEECH_START_FRAMES,
+            SILENCE_STOP_FRAMES,
+        );
         Self {
             vad,
             in_speech: false,
@@ -358,19 +356,15 @@ fn process_chunk(state: &mut VadState, samples: &[i16]) -> Vec<VadTransition> {
         let drain: Vec<i16> = state.sample_buf.drain(..SILERO_FRAME_24K).collect();
         let chunk_16k = resample_24k_to_16k(&drain);
         let prob = state.vad.predict(chunk_16k);
-        if let Some(ref mut dbg) = state.debug {
-            dbg.record(prob);
-        }
+        state.debug.record(prob);
         if let Some(t) = step_vad(state, prob) {
             transitions.push(t);
         }
-        if let Some(ref mut dbg) = state.debug {
-            dbg.maybe_flush(
-                state.in_speech,
-                state.consecutive_speech,
-                state.consecutive_silence,
-            );
-        }
+        state.debug.maybe_flush(
+            state.in_speech,
+            state.consecutive_speech,
+            state.consecutive_silence,
+        );
     }
 
     // Per-second VAD heartbeat. Always fires as long as audio is flowing
@@ -444,13 +438,9 @@ pub async fn run_audio_router_task(
     ws_cmd_tx: mpsc::Sender<WsCommand>,
     metrics_tx: mpsc::Sender<MetricsEvent>,
     cancel: CancellationToken,
-    debug_vad: bool,
 ) {
-    let mut vad = VadState::new(debug_vad);
-    info!(
-        "Silero VAD initialised{}",
-        if debug_vad { " (debug overlay enabled)" } else { "" }
-    );
+    let mut vad = VadState::new();
+    info!("Silero VAD initialised");
 
     loop {
         tokio::select! {
@@ -620,7 +610,7 @@ pub async fn run_audio_router_task(
                 let Some(event) = event else { break };
                 match event {
                     AudioEvent::SessionReset => {
-                        vad = VadState::new(debug_vad);
+                        vad = VadState::new();
                         debug!("Session reset: VAD state cleared");
                     }
                 }

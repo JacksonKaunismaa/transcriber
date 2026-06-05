@@ -45,11 +45,6 @@ pub struct Config {
     /// Don't save transcriptions to conversations/ directory
     #[arg(long)]
     pub no_log: bool,
-
-    /// Write live VAD state to $XDG_RUNTIME_DIR/transcriber_vad.json for the
-    /// Quickshell debug overlay. ~160ms updates, atomic rename writes.
-    #[arg(long)]
-    pub debug_vad: bool,
 }
 
 impl Config {

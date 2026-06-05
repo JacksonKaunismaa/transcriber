@@ -125,7 +125,6 @@ async fn main() -> anyhow::Result<()> {
         ws_cmd_tx,
         metrics_tx.clone(),
         root_token.child_token(),
-        config.debug_vad,
     ));
 
     // Watchdog: if any critical task exits, log the cause to JSONL and kill the process.
