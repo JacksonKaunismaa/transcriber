@@ -140,6 +140,11 @@ Filter patterns are defined in `filters.yaml` and hot-reloaded when the file cha
 
 # Don't save transcriptions to conversations/ (privacy mode)
 ./transcriber-rs/target/release/transcriber --no-log
+
+# Show a live VAD probability overlay via Quickshell (~160ms updates).
+# Writes $XDG_RUNTIME_DIR/transcriber_vad.json; the bar/VadDebugPanel.qml
+# widget reads it via inotify. Useful for diagnosing missed soft speech.
+./transcriber-rs/target/release/transcriber --debug-vad
 ```
 
 To see all options:
