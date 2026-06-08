@@ -248,10 +248,15 @@ async fn output_transcript(state: &mut TranscriptState, transcript: &str, durati
 
     let filtered = filter_text(state, transcript);
 
-    if !filtered.is_empty() && is_fuzzy_duplicate(state, &filtered) {
-        state.metrics_tx.send(MetricsEvent::DuplicateFiltered).await.ok();
-        return;
-    }
+    // Fuzzy dedup temporarily disabled (2026-06-07): its primary justification
+    // was the realtime/whisper-1-fallback race, which is gone now that the
+    // fallback path was removed. With the race gone, the remaining effect is
+    // suppressing legitimately repeated speech ("yes, yes", repeated commands).
+    // Trialing with it off; re-enable by uncommenting if dupes reappear.
+    // if !filtered.is_empty() && is_fuzzy_duplicate(state, &filtered) {
+    //     state.metrics_tx.send(MetricsEvent::DuplicateFiltered).await.ok();
+    //     return;
+    // }
 
     if !filtered.is_empty() {
         let now = std::time::SystemTime::now()
@@ -503,6 +508,8 @@ fn is_repetition_hallucination(text: &str, duration_ms: Option<u64>) -> bool {
 }
 
 /// Check if text is a fuzzy duplicate of a recent transcript.
+// Temporarily uncalled (2026-06-07) — see disabled check in output_transcript.
+#[allow(dead_code)]
 fn is_fuzzy_duplicate(state: &TranscriptState, text: &str) -> bool {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

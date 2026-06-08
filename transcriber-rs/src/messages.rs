@@ -84,6 +84,8 @@ pub enum MetricsEvent {
     FallbackRace,
     #[allow(dead_code)]
     ShortSegmentSkipped,
+    // Temporarily unused (2026-06-07) — fuzzy dedup disabled in transcript.rs.
+    #[allow(dead_code)]
     DuplicateFiltered,
     ContentFiltered,
     WebSocketError,
