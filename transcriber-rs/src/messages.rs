@@ -26,6 +26,9 @@ pub enum WsCommand {
 pub enum AudioEvent {
     /// New WebSocket session — API timestamps reset to 0
     SessionReset,
+    /// User hit the audio-dump hotkey (SIGHUP). Write the rolling
+    /// fallback buffer to a timestamped WAV file under conversations/audio_dumps/.
+    DumpAudio,
 }
 
 /// Events from WebSocket / Audio Router → Transcript Manager.

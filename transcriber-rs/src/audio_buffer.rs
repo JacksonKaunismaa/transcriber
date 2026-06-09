@@ -622,6 +622,9 @@ pub async fn run_audio_router_task(
                         vad = VadState::new();
                         debug!("Session reset: VAD state cleared");
                     }
+                    AudioEvent::DumpAudio => {
+                        crate::audio_dump::dump_to_wav(&vad.fallback_buf);
+                    }
                 }
             }
 

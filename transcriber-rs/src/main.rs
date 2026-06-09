@@ -1,5 +1,6 @@
 mod audio_buffer;
 mod audio_device;
+mod audio_dump;
 mod config;
 mod deps;
 mod error;
@@ -98,6 +99,22 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+
+    // SIGHUP = dump rolling fallback buffer to WAV. We have to handle it
+    // explicitly — SIGHUP's default disposition is to terminate. Bound via
+    // scripts/dump_audio.sh for hyprland hotkey use.
+    {
+        let audio_event_tx = audio_event_tx.clone();
+        tokio::spawn(async move {
+            let mut sig =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+                    .expect("failed to register SIGHUP handler");
+            while sig.recv().await.is_some() {
+                info!("SIGHUP: audio dump requested");
+                audio_event_tx.send(AudioEvent::DumpAudio).await.ok();
+            }
+        });
+    }
 
     // ── Spawn long-lived tasks ───────────────────────────────────────
 

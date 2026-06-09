@@ -148,6 +148,14 @@ The `bar/VadDebugPanel.qml` Quickshell widget reads this via inotify
 and renders a sparkline with threshold lines — useful for diagnosing
 missed soft speech.
 
+### Dumping audio on demand
+
+Bind `scripts/dump_audio.sh` to a hotkey (e.g. in Hyprland) to send the
+running transcriber a SIGHUP. The audio router writes its rolling 30s
+fallback buffer to `conversations/audio_dumps/dump_YYYYMMDD_HHMMSS.wav`
+(24kHz mono, raw PCM). Useful for capturing audio behind missed
+transcriptions so they can be re-fed through different VADs.
+
 To see all options:
 ```bash
 ./transcriber-rs/target/release/transcriber --help
