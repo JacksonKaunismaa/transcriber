@@ -103,7 +103,7 @@ Scope {
         exclusiveZone: 0
 
         implicitWidth: 340
-        implicitHeight: 200
+        implicitHeight: 220
 
         Rectangle {
             anchors.fill: parent
@@ -161,7 +161,7 @@ Scope {
                 Canvas {
                     id: sparkline
                     width: parent.width
-                    height: parent.height - 60
+                    height: parent.height - 76
 
                     onPaint: {
                         const ctx = getContext("2d")
@@ -226,6 +226,14 @@ Scope {
                         repeat: true
                         onTriggered: sparkline.requestPaint()
                     }
+                }
+
+                // ── Footer: hotkey reminder ─────────────────────────
+                Text {
+                    text: "Super+Alt+D → dump last 30s to WAV"
+                    color: "#707080"
+                    font.pixelSize: 10
+                    font.family: "monospace"
                 }
             }
         }
