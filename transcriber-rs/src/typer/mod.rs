@@ -3,7 +3,7 @@ mod detection;
 
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 use crate::messages::TypeCommand;
 use detection::TyperRules;
@@ -54,7 +54,7 @@ pub async fn run_typer_task(
                         let blocking = tokio::task::spawn_blocking(move || {
                             let window_class = detection::get_focused_window_class();
                             let method = rules_clone.get_method_for_window(&window_class);
-                            debug!(window = %window_class, method = %method, "TYPER");
+                            info!(window = %window_class, method = %method, "TYPER");
                             backends::type_with_adaptive(&text, &method)
                         });
 

@@ -20,6 +20,20 @@ pub fn type_with_adaptive(text: &str, method: &str) -> Result<()> {
     }
 }
 
+/// Bail with stderr if a subprocess exited non-zero.
+///
+/// Without this, a backend whose subprocess spawns but fails (compositor
+/// hiccup, paste not honored by the focused window, virtual-keyboard protocol
+/// glitch, etc.) returns Ok(()) and the failure is invisible: the text never
+/// reaches the window but nothing is logged.
+fn check_status(output: &std::process::Output, cmd: &str) -> Result<()> {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("{cmd} exited with {}: {}", output.status, stderr.trim());
+    }
+    Ok(())
+}
+
 fn type_with_shift_insert(text: &str) -> Result<()> {
     let text_with_space = format!("{text} ");
 
@@ -33,12 +47,16 @@ fn type_with_shift_insert(text: &str) -> Result<()> {
             use std::io::Write;
             stdin.write_all(chunk.as_bytes())?;
         }
-        child.wait()?;
+        let status = child.wait()?;
+        if !status.success() {
+            anyhow::bail!("wl-copy --primary exited with {status}");
+        }
 
         // Paste via Shift+Insert
-        Command::new("wtype")
+        let output = Command::new("wtype")
             .args(["-M", "shift", "-k", "Insert", "-m", "shift"])
             .output()?;
+        check_status(&output, "wtype (shift+insert paste)")?;
     }
     Ok(())
 }
@@ -56,12 +74,16 @@ fn type_with_middle_click(text: &str) -> Result<()> {
             use std::io::Write;
             stdin.write_all(chunk.as_bytes())?;
         }
-        child.wait()?;
+        let status = child.wait()?;
+        if !status.success() {
+            anyhow::bail!("wl-copy --primary --trim-newline exited with {status}");
+        }
 
         // Middle-click paste
-        Command::new("wlrctl")
+        let output = Command::new("wlrctl")
             .args(["pointer", "click", "middle"])
             .output()?;
+        check_status(&output, "wlrctl pointer click middle")?;
     }
     Ok(())
 }
@@ -88,9 +110,10 @@ fn type_with_ydotool(text: &str) -> Result<()> {
 fn type_with_wtype(text: &str) -> Result<()> {
     let chunks = split_for_wtype_keycode22(&format!("{text} "));
     for chunk in &chunks {
-        Command::new("wtype")
+        let output = Command::new("wtype")
             .arg(chunk)
             .output()?;
+        check_status(&output, "wtype")?;
     }
     Ok(())
 }
