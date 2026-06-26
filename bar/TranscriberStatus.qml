@@ -72,6 +72,7 @@ MaterialSymbol {
         id: pidFileView
         path: root.pidFile
         watchChanges: true
+        printErrors: false  // a missing PID file is the normal "idle" signal, handled in onLoadFailed
 
         onFileChanged: this.reload()
 
@@ -91,6 +92,7 @@ MaterialSymbol {
         id: healthFileView
         path: Quickshell.env("XDG_RUNTIME_DIR") + "/transcriber_health"
         watchChanges: true
+        printErrors: false  // absent until the transcriber writes it; defaults to "ok" in onLoadFailed
 
         onFileChanged: this.reload()
 

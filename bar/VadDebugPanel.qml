@@ -49,6 +49,7 @@ Scope {
         id: snapshotView
         path: root.snapshotPath
         watchChanges: true
+        printErrors: false  // snapshot is absent unless transcriber runs in VAD-debug mode; handled in onLoadFailed
 
         onFileChanged: this.reload()
 
