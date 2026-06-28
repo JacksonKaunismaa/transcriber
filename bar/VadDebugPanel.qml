@@ -85,7 +85,9 @@ Scope {
 
     PanelWindow {
         id: panel
-        visible: root.snapshotFresh
+        // Hidden while the snapshot is stale (transcriber stopped) OR while the
+        // mic is muted — the overlay is only useful when audio is live.
+        visible: root.snapshotFresh && !root.paused
         color: "transparent"
 
         WlrLayershell.namespace: "transcriber:vad-debug"
@@ -127,14 +129,12 @@ Scope {
                         width: 70
                         height: 22
                         radius: 4
-                        color: root.paused ? "#6e3038"
-                             : root.inSpeech ? "#316340"
-                             : "#404048"
+                        // Panel hides entirely when muted (see panel.visible),
+                        // so only the live IN SPEECH / IDLE states render here.
+                        color: root.inSpeech ? "#316340" : "#404048"
                         Text {
                             anchors.centerIn: parent
-                            text: root.paused ? "MUTED"
-                                : root.inSpeech ? "IN SPEECH"
-                                : "IDLE"
+                            text: root.inSpeech ? "IN SPEECH" : "IDLE"
                             color: "white"
                             font.pixelSize: 11
                             font.bold: true
