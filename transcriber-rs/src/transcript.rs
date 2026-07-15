@@ -13,6 +13,12 @@ use crate::messages::{MetricsEvent, TranscriptEvent, TypeCommand};
 /// How long to wait for an item to complete before skipping it
 const QUEUE_TIMEOUT_SECS: f64 = 10.0;
 
+/// When a completion arrives for an item the queue already skipped, type it
+/// only if it's at most this many seconds past the skip. Later than that the
+/// user has likely moved to a different window/context, and injecting stale
+/// text is worse than logging it for manual recovery.
+const SKIP_RECOVERY_TYPE_CUTOFF_SECS: f64 = 60.0;
+
 /// State for the Transcript Manager task.
 struct TranscriptState {
     /// Filters loaded from filters.yaml
@@ -31,6 +37,9 @@ struct TranscriptState {
     completed_items: std::collections::HashSet<String>,
     /// When each item was added to item_order (for queue timeout)
     item_created_at: HashMap<String, std::time::Instant>,
+    /// Items the queue gave up waiting on: item_id -> when skipped. If their
+    /// completion arrives later, we recover the text instead of dropping it.
+    skipped_items: HashMap<String, std::time::Instant>,
     /// Config flags
     allow_bye_thank_you: bool,
     allow_non_ascii: bool,
@@ -85,6 +94,7 @@ pub async fn run_transcript_task(
         transcript_buffer: String::new(),
         completed_items: std::collections::HashSet::new(),
         item_created_at: HashMap::new(),
+        skipped_items: HashMap::new(),
         allow_bye_thank_you: config.allow_bye_thank_you,
         allow_non_ascii: config.allow_non_ascii,
         allow_fillers: config.allow_fillers,
@@ -143,6 +153,23 @@ async fn handle_event(state: &mut TranscriptState, event: TranscriptEvent) {
                 output_transcript(state, &transcript, duration_ms).await;
                 return;
             }
+            if let Some(skipped_at) = state.skipped_items.remove(&item_id) {
+                // The queue timed out on this item and moved past it — its
+                // slot in item_order is behind next_output_index, so the
+                // normal flush would never emit it. Recover it directly.
+                state.completed_items.insert(item_id.clone());
+                let late_secs = skipped_at.elapsed().as_secs_f64();
+                if late_secs <= SKIP_RECOVERY_TYPE_CUTOFF_SECS {
+                    info!("Recovered skipped item {item_id} ({late_secs:.1}s after skip) — typing");
+                    output_transcript(state, &transcript, duration_ms).await;
+                } else {
+                    warn!(
+                        "Completion for skipped item {item_id} arrived {late_secs:.0}s after skip — too stale to type, logging for manual recovery: {transcript}"
+                    );
+                    state.metrics_tx.send(MetricsEvent::ContentFiltered).await.ok();
+                }
+                return;
+            }
             state.completed_items.insert(item_id.clone());
             state.transcript_buffer.clear();
 
@@ -181,6 +208,7 @@ async fn handle_event(state: &mut TranscriptState, event: TranscriptEvent) {
             state.completed_transcripts.clear();
             state.completed_items.clear();
             state.item_created_at.clear();
+            state.skipped_items.clear();
             state.next_output_index = 0;
             state.transcript_buffer.clear();
             // Keep recent_transcripts to prevent duplicates across reconnections
@@ -207,6 +235,10 @@ async fn flush_ordered_transcripts(state: &mut TranscriptState) {
             if should_skip {
                 warn!("Queue timeout: skipping item {next_id_owned} (waited >{QUEUE_TIMEOUT_SECS}s for completion)");
                 state.item_created_at.remove(&next_id_owned);
+                // Remember the skip so a late completion can still be
+                // recovered (see RealtimeCompleted). Bounded by session
+                // lifetime — cleared on SessionReset.
+                state.skipped_items.insert(next_id_owned.clone(), std::time::Instant::now());
                 state.next_output_index += 1;
             } else {
                 // Log what we're blocked on (only once per item, at 3s)

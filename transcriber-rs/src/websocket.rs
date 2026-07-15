@@ -178,12 +178,18 @@ async fn do_connection(
     .await
     .map_err(|_| anyhow::anyhow!("WebSocket connection timed out after 10s"))??;
     let (mut ws_write, mut ws_read) = ws_stream.split();
-    let mut item_created_at: HashMap<String, std::time::Instant> = HashMap::new();
+    // Committed items awaiting completion: item_id -> (created_at, local-VAD
+    // utterance duration). Populated at `conversation.item.created`, which the
+    // server emits synchronously in commit order — so pairing the duration
+    // FIFO there is safe. Do NOT pair at `.completed`: completions can arrive
+    // arbitrarily late and out of order (observed 299s late on 2026-07-14,
+    // which desynced the old positional pairing and mis-tagged a real 30s
+    // utterance as 160ms → dropped as a "speed hallucination").
+    let mut pending_items: HashMap<String, (std::time::Instant, Option<u64>)> = HashMap::new();
     // FIFO of utterance durations measured by local VAD, waiting to be
-    // attached to the next `.completed` event from the server. The server
-    // assigns item_ids only after we commit, so we can't pre-associate
-    // duration with item_id — we rely on ordering (commits and completions
-    // arrive in the same order).
+    // attached to the next `conversation.item.created` from the server. The
+    // server assigns item_ids only after we commit, so we can't pre-associate
+    // duration with item_id at commit time.
     let mut pending_durations: std::collections::VecDeque<Option<u64>> =
         std::collections::VecDeque::new();
 
@@ -201,7 +207,7 @@ async fn do_connection(
     audio_event_tx.send(AudioEvent::SessionReset).await.ok();
     // Notify transcript task to clear ordering/completion state
     transcript_tx.send(TranscriptEvent::SessionReset).await.ok();
-    item_created_at.clear();
+    pending_items.clear();
     pending_durations.clear();
     println!(
         "[INFO] WebSocket connection established (transcription mode, model: {MODEL})"
@@ -317,7 +323,7 @@ async fn do_connection(
                             &text,
                             transcript_tx,
                             metrics_tx,
-                            &mut item_created_at,
+                            &mut pending_items,
                             &mut pending_durations,
                         ).await;
 
@@ -392,7 +398,7 @@ async fn handle_server_event(
     text: &str,
     transcript_tx: &mpsc::Sender<TranscriptEvent>,
     metrics_tx: &mpsc::Sender<MetricsEvent>,
-    item_created_at: &mut HashMap<String, std::time::Instant>,
+    pending_items: &mut HashMap<String, (std::time::Instant, Option<u64>)>,
     pending_durations: &mut std::collections::VecDeque<Option<u64>>,
 ) -> EventAction {
     let event: ServerEvent = match serde_json::from_str(text) {
@@ -413,16 +419,20 @@ async fn handle_server_event(
         // (+ separate "conversation.item.done"). Accept both so old sessions
         // and any straggler events still register.
         "conversation.item.created" | "conversation.item.added" => {
-            if let Some(item) = &event.item {
-                if let Some(id) = &item.id {
-                    item_created_at.insert(id.clone(), std::time::Instant::now());
-                    transcript_tx
-                        .send(TranscriptEvent::ItemCreated {
-                            item_id: id.clone(),
-                        })
-                        .await
-                        .ok();
-                }
+            // Guard against seeing both .created and .added for one item —
+            // a second pop here would desync the duration FIFO.
+            if let Some(item) = &event.item
+                && let Some(id) = &item.id
+                && !pending_items.contains_key(id)
+            {
+                let duration_ms = pending_durations.pop_front().flatten();
+                pending_items.insert(id.clone(), (std::time::Instant::now(), duration_ms));
+                transcript_tx
+                    .send(TranscriptEvent::ItemCreated {
+                        item_id: id.clone(),
+                    })
+                    .await
+                    .ok();
             }
             EventAction::Continue
         }
@@ -437,17 +447,20 @@ async fn handle_server_event(
             if event.item_id.is_none() && !transcript.is_empty() {
                 info!("Realtime transcription: {transcript} [item_id=unknown]");
             }
-            // Pop next pending duration (FIFO with commit order — see
-            // pending_durations comment in do_connection).
-            let duration_ms = pending_durations.pop_front().flatten();
             if let Some(item_id) = &event.item_id {
-                if let Some(created) = item_created_at.remove(item_id) {
-                    let rtt_ms = created.elapsed().as_millis() as u64;
-                    info!("Transcription RTT: {rtt_ms}ms for {item_id}");
-                    metrics_tx.send(MetricsEvent::TranscriptionRtt {
-                        millis: rtt_ms,
-                    }).await.ok();
-                }
+                // Duration was paired with this item_id at item.created, so a
+                // late or out-of-order completion still gets its own duration.
+                let duration_ms = match pending_items.remove(item_id) {
+                    Some((created, duration_ms)) => {
+                        let rtt_ms = created.elapsed().as_millis() as u64;
+                        info!("Transcription RTT: {rtt_ms}ms for {item_id}");
+                        metrics_tx.send(MetricsEvent::TranscriptionRtt {
+                            millis: rtt_ms,
+                        }).await.ok();
+                        duration_ms
+                    }
+                    None => None,
+                };
                 if !transcript.is_empty() {
                     info!("Realtime transcription: {transcript} [item_id={item_id}]");
                 }
