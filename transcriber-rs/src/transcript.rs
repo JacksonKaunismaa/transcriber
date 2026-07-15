@@ -596,3 +596,129 @@ fn find_filters_yaml() -> PathBuf {
     // Default — will be caught at load time
     candidates[0].clone()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_state(
+        type_tx: mpsc::Sender<TypeCommand>,
+        metrics_tx: mpsc::Sender<MetricsEvent>,
+    ) -> TranscriptState {
+        TranscriptState {
+            // Nonexistent path -> empty filter sets; text passes through.
+            filters: Filters::load(&PathBuf::from("/nonexistent/filters.yaml")),
+            item_order: Vec::new(),
+            completed_transcripts: HashMap::new(),
+            next_output_index: 0,
+            recent_transcripts: Vec::new(),
+            transcript_buffer: String::new(),
+            completed_items: std::collections::HashSet::new(),
+            item_created_at: HashMap::new(),
+            skipped_items: HashMap::new(),
+            allow_bye_thank_you: false,
+            allow_non_ascii: false,
+            allow_fillers: false,
+            type_tx,
+            metrics_tx,
+        }
+    }
+
+    fn skipped_ago(secs: u64) -> std::time::Instant {
+        std::time::Instant::now() - std::time::Duration::from_secs(secs)
+    }
+
+    /// A completion arriving for a queue-skipped item shortly after the skip
+    /// must still be typed (INCIDENTS.md 2026-07-14: previously it was
+    /// logged and silently lost).
+    #[tokio::test]
+    async fn skipped_item_recovered_when_fresh() {
+        let (ttx, mut trx) = mpsc::channel(8);
+        let (mtx, mut _mrx) = mpsc::channel(64);
+        let mut state = test_state(ttx, mtx);
+        state.skipped_items.insert("item_A".to_string(), skipped_ago(5));
+
+        handle_event(
+            &mut state,
+            TranscriptEvent::RealtimeCompleted {
+                item_id: "item_A".to_string(),
+                transcript: "this text was stalled but is still fresh".to_string(),
+                duration_ms: Some(4000),
+            },
+        )
+        .await;
+
+        let cmd = trx.try_recv().expect("fresh recovery should be typed");
+        assert_eq!(cmd.text, "this text was stalled but is still fresh");
+        assert!(state.skipped_items.is_empty());
+        assert!(state.completed_items.contains("item_A"));
+    }
+
+    /// Past the staleness cutoff the text must NOT be auto-typed (the user
+    /// has moved on -- it would land in whatever window has focus), only
+    /// WARN-logged for manual recovery.
+    #[tokio::test]
+    async fn skipped_item_too_stale_is_not_typed() {
+        let (ttx, mut trx) = mpsc::channel(8);
+        let (mtx, mut _mrx) = mpsc::channel(64);
+        let mut state = test_state(ttx, mtx);
+        state
+            .skipped_items
+            .insert("item_A".to_string(), skipped_ago(120));
+
+        handle_event(
+            &mut state,
+            TranscriptEvent::RealtimeCompleted {
+                item_id: "item_A".to_string(),
+                transcript: "this arrived minutes late".to_string(),
+                duration_ms: Some(4000),
+            },
+        )
+        .await;
+
+        assert!(trx.try_recv().is_err(), "stale recovery must not type");
+        assert!(state.completed_items.contains("item_A"));
+    }
+
+    /// End-to-end through the ordering queue: skip is recorded when the
+    /// timeout fires, and later items are not blocked.
+    #[tokio::test]
+    async fn queue_timeout_records_skip_and_unblocks() {
+        let (ttx, mut trx) = mpsc::channel(8);
+        let (mtx, mut _mrx) = mpsc::channel(64);
+        let mut state = test_state(ttx, mtx);
+
+        // Two items created; A never completes, B does.
+        for id in ["item_A", "item_B"] {
+            handle_event(
+                &mut state,
+                TranscriptEvent::ItemCreated {
+                    item_id: id.to_string(),
+                },
+            )
+            .await;
+        }
+        handle_event(
+            &mut state,
+            TranscriptEvent::RealtimeCompleted {
+                item_id: "item_B".to_string(),
+                transcript: "second utterance text here".to_string(),
+                duration_ms: Some(3000),
+            },
+        )
+        .await;
+        // B is held back: queue is blocked on A.
+        assert!(trx.try_recv().is_err(), "B must wait for A");
+
+        // Simulate A exceeding the queue timeout, then run the flush.
+        state
+            .item_created_at
+            .insert("item_A".to_string(), skipped_ago(QUEUE_TIMEOUT_SECS as u64 + 5));
+        flush_ordered_transcripts(&mut state).await;
+
+        // A was skipped (recorded for recovery), B was released.
+        assert!(state.skipped_items.contains_key("item_A"));
+        let cmd = trx.try_recv().expect("B should flush after A is skipped");
+        assert_eq!(cmd.text, "second utterance text here");
+    }
+}

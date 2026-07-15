@@ -531,3 +531,138 @@ async fn handle_server_event(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn send(
+        json: &str,
+        transcript_tx: &mpsc::Sender<TranscriptEvent>,
+        metrics_tx: &mpsc::Sender<MetricsEvent>,
+        pending_items: &mut HashMap<String, (std::time::Instant, Option<u64>)>,
+        pending_durations: &mut std::collections::VecDeque<Option<u64>>,
+    ) {
+        handle_server_event(json, transcript_tx, metrics_tx, pending_items, pending_durations)
+            .await;
+    }
+
+    fn created(id: &str) -> String {
+        format!(r#"{{"type":"conversation.item.created","item":{{"id":"{id}"}}}}"#)
+    }
+
+    fn completed(id: &str, text: &str) -> String {
+        format!(
+            r#"{{"type":"conversation.item.input_audio_transcription.completed","item_id":"{id}","transcript":"{text}"}}"#
+        )
+    }
+
+    fn drain_completions(
+        rx: &mut mpsc::Receiver<TranscriptEvent>,
+    ) -> Vec<(String, Option<u64>)> {
+        let mut got = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            if let TranscriptEvent::RealtimeCompleted {
+                item_id,
+                duration_ms,
+                ..
+            } = ev
+            {
+                got.push((item_id, duration_ms));
+            }
+        }
+        got
+    }
+
+    /// Replay of the 2026-07-14 incident (INCIDENTS.md: "Real speech dropped
+    /// when one completion arrives late"). One stalled completion must not
+    /// shift other items' durations. With the old positional FIFO, item B
+    /// ("Um") got A's 19934ms, C (a real 95-word utterance) got B's 160ms —
+    /// tripping the >=10 wps speed-hallucination filter and dropping it.
+    #[tokio::test]
+    async fn late_completion_gets_its_own_duration() {
+        let (ttx, mut trx) = mpsc::channel(64);
+        let (mtx, mut _mrx) = mpsc::channel(256);
+        let mut items = HashMap::new();
+        let mut durs = std::collections::VecDeque::new();
+
+        // Commit A (~20s utterance); its completion will stall for minutes.
+        durs.push_back(Some(19934));
+        send(&created("item_A"), &ttx, &mtx, &mut items, &mut durs).await;
+        // Commit B ("Um", 160ms of speech).
+        durs.push_back(Some(160));
+        send(&created("item_B"), &ttx, &mtx, &mut items, &mut durs).await;
+        // B completes while A is still stalled.
+        send(&completed("item_B", "Um"), &ttx, &mtx, &mut items, &mut durs).await;
+        // Commit C (30s max-buffer utterance); completes while A still stalled.
+        durs.push_back(Some(30000));
+        send(&created("item_C"), &ttx, &mtx, &mut items, &mut durs).await;
+        send(&completed("item_C", "ninety five real words"), &ttx, &mtx, &mut items, &mut durs).await;
+        // A's completion finally arrives, out of order.
+        send(&completed("item_A", "blast radius"), &ttx, &mtx, &mut items, &mut durs).await;
+
+        assert_eq!(
+            drain_completions(&mut trx),
+            vec![
+                ("item_B".to_string(), Some(160)),   // old code: 19934 (A's)
+                ("item_C".to_string(), Some(30000)), // old code: 160 -> dropped
+                ("item_A".to_string(), Some(19934)), // old code: 30000
+            ]
+        );
+        assert!(items.is_empty(), "all items completed");
+        assert!(durs.is_empty(), "all durations claimed");
+    }
+
+    /// A duplicate .added after .created for the same item must not pop a
+    /// second duration (that would re-desync the pairing).
+    #[tokio::test]
+    async fn duplicate_creation_event_does_not_double_pop() {
+        let (ttx, mut trx) = mpsc::channel(64);
+        let (mtx, mut _mrx) = mpsc::channel(256);
+        let mut items = HashMap::new();
+        let mut durs = std::collections::VecDeque::new();
+
+        durs.push_back(Some(1000));
+        durs.push_back(Some(2000));
+        send(&created("item_A"), &ttx, &mtx, &mut items, &mut durs).await;
+        // GA server may emit .added alongside .created for the same item.
+        let added = r#"{"type":"conversation.item.added","item":{"id":"item_A"}}"#;
+        send(added, &ttx, &mtx, &mut items, &mut durs).await;
+        send(&created("item_B"), &ttx, &mtx, &mut items, &mut durs).await;
+        send(&completed("item_A", "a"), &ttx, &mtx, &mut items, &mut durs).await;
+        send(&completed("item_B", "b"), &ttx, &mtx, &mut items, &mut durs).await;
+
+        assert_eq!(
+            drain_completions(&mut trx),
+            vec![
+                ("item_A".to_string(), Some(1000)),
+                ("item_B".to_string(), Some(2000)),
+            ]
+        );
+    }
+
+    /// A server-rejected commit produces no item.created; its orphaned
+    /// duration must be discarded on the error event, or every later item
+    /// inherits the wrong duration for the rest of the session.
+    #[tokio::test]
+    async fn rejected_commit_discards_orphaned_duration() {
+        let (ttx, mut trx) = mpsc::channel(64);
+        let (mtx, mut _mrx) = mpsc::channel(256);
+        let mut items = HashMap::new();
+        let mut durs = std::collections::VecDeque::new();
+
+        // Commit A is rejected server-side (no item.created will follow).
+        durs.push_back(Some(500));
+        let err = r#"{"type":"error","error":{"code":"input_audio_buffer_commit_empty","message":"buffer too small"}}"#;
+        send(err, &ttx, &mtx, &mut items, &mut durs).await;
+        // Commit B succeeds and must get its own duration, not A's.
+        durs.push_back(Some(7000));
+        send(&created("item_B"), &ttx, &mtx, &mut items, &mut durs).await;
+        send(&completed("item_B", "b"), &ttx, &mtx, &mut items, &mut durs).await;
+
+        assert_eq!(
+            drain_completions(&mut trx),
+            vec![("item_B".to_string(), Some(7000))]
+        );
+    }
+}
