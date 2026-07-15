@@ -207,8 +207,6 @@ async fn do_connection(
     audio_event_tx.send(AudioEvent::SessionReset).await.ok();
     // Notify transcript task to clear ordering/completion state
     transcript_tx.send(TranscriptEvent::SessionReset).await.ok();
-    pending_items.clear();
-    pending_durations.clear();
     println!(
         "[INFO] WebSocket connection established (transcription mode, model: {MODEL})"
     );
@@ -419,20 +417,30 @@ async fn handle_server_event(
         // (+ separate "conversation.item.done"). Accept both so old sessions
         // and any straggler events still register.
         "conversation.item.created" | "conversation.item.added" => {
-            // Guard against seeing both .created and .added for one item —
-            // a second pop here would desync the duration FIFO.
-            if let Some(item) = &event.item
-                && let Some(id) = &item.id
-                && !pending_items.contains_key(id)
-            {
-                let duration_ms = pending_durations.pop_front().flatten();
-                pending_items.insert(id.clone(), (std::time::Instant::now(), duration_ms));
-                transcript_tx
-                    .send(TranscriptEvent::ItemCreated {
-                        item_id: id.clone(),
-                    })
-                    .await
-                    .ok();
+            match event.item.as_ref().and_then(|i| i.id.as_ref()) {
+                Some(id) if !pending_items.contains_key(id) => {
+                    let duration_ms = pending_durations.pop_front().flatten();
+                    pending_items.insert(id.clone(), (std::time::Instant::now(), duration_ms));
+                    transcript_tx
+                        .send(TranscriptEvent::ItemCreated {
+                            item_id: id.clone(),
+                        })
+                        .await
+                        .ok();
+                }
+                // Seeing both .created and .added for one item — a second
+                // pop here would desync the duration FIFO.
+                Some(_) => {}
+                None => {
+                    // A creation event with no item id can never be matched
+                    // by a .completed — discard its queued duration so later
+                    // items don't inherit the wrong one (same desync class as
+                    // INCIDENTS.md 2026-07-14).
+                    let stale = pending_durations.pop_front().flatten();
+                    warn!(
+                        "conversation.item event without item id — discarding queued duration {stale:?}"
+                    );
+                }
             }
             EventAction::Continue
         }
@@ -496,6 +504,18 @@ async fn handle_server_event(
                 if err.code == "session_expired" {
                     warn!("Session expired: {}", err.message);
                     return EventAction::SessionExpired;
+                }
+                // A rejected commit never produces item.created, which would
+                // leave its duration stuck at the FIFO head and shift every
+                // later item's duration (the desync class from INCIDENTS.md
+                // 2026-07-14). Errors don't reconnect (see EventAction::Error
+                // handling), so discard the orphaned duration here.
+                if err.code == "input_audio_buffer_commit_empty" {
+                    let stale = pending_durations.pop_front().flatten();
+                    warn!(
+                        "Commit rejected ({}) — discarding queued duration {stale:?} to keep pairing aligned",
+                        err.code
+                    );
                 }
                 return EventAction::Error {
                     code: err.code.clone(),

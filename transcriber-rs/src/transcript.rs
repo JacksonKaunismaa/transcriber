@@ -142,12 +142,14 @@ async fn handle_event(state: &mut TranscriptState, event: TranscriptEvent) {
             duration_ms,
         } => {
             if state.completed_items.contains(&item_id) {
-                // Late arrival after the fallback path already marked this item complete.
-                // Don't drop blindly: if the prior completion was an empty fallback
-                // (e.g. "no matching chunks"), we never emitted text and we lose the
-                // content. Route through output_transcript — its fuzzy-dedup will
-                // suppress if the prior completion already produced similar text.
-                debug!("Late Realtime for already-completed item {} — routing through dedup",
+                // Duplicate completion for an already-completed item. Don't
+                // drop blindly — if the prior completion was empty we never
+                // emitted text and would lose content. Route through
+                // output_transcript. NOTE: fuzzy dedup is currently disabled
+                // (see output_transcript), so a true duplicate would type
+                // twice; we accept that over losing content. Never observed
+                // from the realtime path alone since the fallback removal.
+                debug!("Late Realtime for already-completed item {} — routing through output",
                        &item_id[..20.min(item_id.len())]);
                 state.metrics_tx.send(MetricsEvent::FallbackRace).await.ok();
                 output_transcript(state, &transcript, duration_ms).await;
@@ -177,13 +179,17 @@ async fn handle_event(state: &mut TranscriptState, event: TranscriptEvent) {
             flush_ordered_transcripts(state).await;
         }
 
+        // Dead path — no emitter since the whisper-1 REST fallback removal.
+        // If revived: this arm needs the same skipped_items recovery check as
+        // RealtimeCompleted above, or a fallback completion for a queue-skipped
+        // item will insert behind next_output_index and silently stick.
         TranscriptEvent::FallbackCompleted {
             item_id,
             transcript,
             duration_ms,
         } => {
             if state.completed_items.contains(&item_id) {
-                debug!("Late Fallback for already-completed item {} — routing through dedup",
+                debug!("Late Fallback for already-completed item {} — routing through output",
                        &item_id[..20.min(item_id.len())]);
                 state.metrics_tx.send(MetricsEvent::FallbackRace).await.ok();
                 output_transcript(state, &transcript, duration_ms).await;
