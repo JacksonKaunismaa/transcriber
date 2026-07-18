@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use base64::Engine;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use voice_activity_detector::VoiceActivityDetector;
 
 use crate::messages::{AudioChunk, AudioEvent, MetricsEvent, WsCommand};
@@ -57,6 +57,15 @@ const MIN_COMMIT_BYTES: u64 =
 /// via SIGUSR1). cpal normally delivers chunks every ~43ms (1024 frames /
 /// 24kHz); 500ms is comfortably above the noise floor.
 const PAUSE_GAP_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Raw audio byte rate at the capture format (24kHz, 16-bit mono).
+const BYTES_PER_SEC: u64 = SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64;
+
+/// Cap on audio buffered locally while the websocket can't keep up (network
+/// backpressure / reconnect). Two minutes rides out long congestion stalls
+/// (observed: 26.5s on 2026-07-18) with late-but-complete transcription;
+/// past it the oldest entries are dropped and counted in metrics.
+const MAX_SEND_BACKLOG_MS: u64 = 120_000;
 
 /// How much pre-speech audio to retain so that the first word of an utterance
 /// isn't clipped (silero needs ~3 frames = 96ms before declaring speech, so
@@ -442,9 +451,18 @@ pub async fn run_audio_router_task(
     let mut vad = VadState::new();
     info!("Silero VAD initialised");
 
+    // Never-blocking sender: overflow buffers locally instead of stalling
+    // this loop when the websocket backs up (see send_queue.rs).
+    let mut send_q = crate::send_queue::SendQueue::new(
+        (MAX_SEND_BACKLOG_MS / 1000) * BYTES_PER_SEC,
+        BYTES_PER_SEC,
+    );
+    let mut last_reported_backlog_ms: u64 = 0;
+
     // Keepalive for the VAD debug overlay: re-flush the snapshot file every
     // 500ms while audio is paused so the widget doesn't think we've died.
     // Skip behaviour avoids burst-firing if a chunk hog stalls the task.
+    // Doubles as the backlog flush/report tick when no chunks are flowing.
     let mut keepalive = tokio::time::interval(std::time::Duration::from_millis(500));
     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -457,6 +475,11 @@ pub async fn run_audio_router_task(
 
             chunk = audio_rx.recv() => {
                 let Some(chunk) = chunk else { break };
+
+                // Drain any send backlog first — a recovered socket catches
+                // up at chunk cadence, oldest audio first.
+                send_q.try_flush(&ws_cmd_tx);
+                vad.debug.set_backlog_ms(send_q.backlog_ms());
 
                 // Detect capture pause (mute/unmute). On resume:
                 //   - If we were mid-utterance with audio sent, commit it.
@@ -476,10 +499,7 @@ pub async fn run_audio_router_task(
                             );
                             // No reliable speech duration here — mute/unmute
                             // mid-utterance; just send None.
-                            ws_cmd_tx
-                                .send(WsCommand::Commit { utterance_duration_ms: None })
-                                .await
-                                .ok();
+                            send_q.send(&ws_cmd_tx, WsCommand::Commit { utterance_duration_ms: None });
                             vad.reset_after_commit();
                         }
                         vad.prefix_buf.clear();
@@ -520,15 +540,14 @@ pub async fn run_audio_router_task(
                             );
                             if !prefix.is_empty() {
                                 let b64 = base64::engine::general_purpose::STANDARD.encode(&prefix);
-                                ws_cmd_tx.send(WsCommand::SendAudio { audio_b64: b64 }).await.ok();
+                                send_q.send(&ws_cmd_tx, WsCommand::SendAudio { audio_b64: b64 });
                                 vad.bytes_since_commit += prefix.len() as u64;
                             }
                             // Also send the current chunk's bytes (the chunk
                             // that triggered the transition).
                             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                            ws_cmd_tx.send(WsCommand::SendAudio { audio_b64: b64 }).await.ok();
+                            send_q.send(&ws_cmd_tx, WsCommand::SendAudio { audio_b64: b64 });
                             vad.bytes_since_commit += bytes.len() as u64;
-                            metrics_tx.send(MetricsEvent::AudioChunkSent).await.ok();
                             sent_via_prefix_flush = true;
                         }
                         VadTransition::SpeechStopped(peak_prob) => {
@@ -537,9 +556,8 @@ pub async fn run_audio_router_task(
                             // sees the full tail.
                             if !sent_via_prefix_flush {
                                 let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                                ws_cmd_tx.send(WsCommand::SendAudio { audio_b64: b64 }).await.ok();
+                                send_q.send(&ws_cmd_tx, WsCommand::SendAudio { audio_b64: b64 });
                                 vad.bytes_since_commit += bytes.len() as u64;
-                                metrics_tx.send(MetricsEvent::AudioChunkSent).await.ok();
                                 sent_via_prefix_flush = true; // suppress further send below
                             }
                             if vad.bytes_since_commit >= MIN_COMMIT_BYTES {
@@ -565,10 +583,7 @@ pub async fn run_audio_router_task(
                                     SILENCE_STOP_FRAMES,
                                     vad.silence_streaks_broken,
                                 );
-                                ws_cmd_tx
-                                    .send(WsCommand::Commit { utterance_duration_ms })
-                                    .await
-                                    .ok();
+                                send_q.send(&ws_cmd_tx, WsCommand::Commit { utterance_duration_ms });
                                 vad.reset_after_commit();
                             } else {
                                 debug!(
@@ -588,9 +603,8 @@ pub async fn run_audio_router_task(
                 if !sent_via_prefix_flush {
                     if vad.in_speech {
                         let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                        ws_cmd_tx.send(WsCommand::SendAudio { audio_b64: b64 }).await.ok();
+                        send_q.send(&ws_cmd_tx, WsCommand::SendAudio { audio_b64: b64 });
                         vad.bytes_since_commit += bytes.len() as u64;
-                        metrics_tx.send(MetricsEvent::AudioChunkSent).await.ok();
                     } else {
                         vad.push_prefix(&bytes);
                     }
@@ -607,10 +621,7 @@ pub async fn run_audio_router_task(
                     let utterance_duration_ms = vad.speech_start_instant.map(|t| {
                         std::time::Instant::now().duration_since(t).as_millis() as u64
                     });
-                    ws_cmd_tx
-                        .send(WsCommand::Commit { utterance_duration_ms })
-                        .await
-                        .ok();
+                    send_q.send(&ws_cmd_tx, WsCommand::Commit { utterance_duration_ms });
                     vad.reset_after_commit();
                 }
             }
@@ -629,6 +640,35 @@ pub async fn run_audio_router_task(
             }
 
             _ = keepalive.tick() => {
+                // Opportunistic backlog drain + gauge/drop reporting. Chunks
+                // also flush on arrival; this covers the mic-muted case.
+                send_q.try_flush(&ws_cmd_tx);
+                // try_reserve before mutating local state so a full metrics
+                // channel delays reporting (next tick retries) instead of
+                // silently losing gauge updates / drop counts.
+                let backlog_ms = send_q.backlog_ms();
+                vad.debug.set_backlog_ms(backlog_ms);
+                if backlog_ms != last_reported_backlog_ms
+                    && let Ok(permit) = metrics_tx.try_reserve()
+                {
+                    permit.send(MetricsEvent::SendBacklog { ms: backlog_ms });
+                    last_reported_backlog_ms = backlog_ms;
+                }
+                if let Ok(permit) = metrics_tx.try_reserve() {
+                    let dropped = send_q.take_dropped();
+                    if dropped.chunks > 0 || dropped.commits > 0 {
+                        warn!(
+                            "Send backlog overflow: dropped {} chunks ({}ms audio), {} commits",
+                            dropped.chunks, dropped.ms, dropped.commits,
+                        );
+                        permit.send(MetricsEvent::AudioDropped {
+                            chunks: dropped.chunks,
+                            ms: dropped.ms,
+                            commits: dropped.commits,
+                        });
+                    }
+                }
+
                 // Refresh the debug snapshot if no chunks have arrived recently
                 // (mic muted, or capture stalled). Holds the widget visible.
                 let stale = vad.last_chunk_at

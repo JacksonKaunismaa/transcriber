@@ -147,6 +147,12 @@ pub async fn run_connection(
 
 const MODEL: &str = "gpt-realtime-whisper";
 
+/// Writer-task queue depth. Small on purpose: the big backlog lives in the
+/// audio router's SendQueue (send_queue.rs) where it survives reconnects;
+/// anything queued here or in the ws_cmd channel is lost when the
+/// connection dies.
+const WRITER_QUEUE_SIZE: usize = 8;
+
 async fn do_connection(
     api_key: &str,
     delay: &str,
@@ -193,13 +199,22 @@ async fn do_connection(
     let mut pending_durations: std::collections::VecDeque<Option<u64>> =
         std::collections::VecDeque::new();
 
-    // Drain stale audio commands from previous connection
-    let mut drained = 0;
-    while ws_cmd_rx.try_recv().is_ok() {
-        drained += 1;
+    // Drain stale commands from the previous connection. Their audio is
+    // gone from the (new) server-side buffer anyway; log the breakdown —
+    // a drained Commit means an utterance boundary was lost to the
+    // reconnect (its audio merges into the next commit).
+    let mut drained_audio = 0u64;
+    let mut drained_commits = 0u64;
+    while let Ok(cmd) = ws_cmd_rx.try_recv() {
+        match cmd {
+            WsCommand::SendAudio { .. } => drained_audio += 1,
+            WsCommand::Commit { .. } => drained_commits += 1,
+        }
     }
-    if drained > 0 {
-        info!("Drained {drained} stale audio commands from previous connection");
+    if drained_audio > 0 || drained_commits > 0 {
+        info!(
+            "Drained {drained_audio} stale audio chunks + {drained_commits} commits from previous connection"
+        );
     }
 
     metrics_tx.send(MetricsEvent::ConnectionSuccess).await.ok();
@@ -233,6 +248,63 @@ async fn do_connection(
         .await?;
     info!("Transcription session config sent (model: {MODEL}, delay: {delay})");
 
+    // ── Writer task ──────────────────────────────────────────────────
+    // All further socket writes happen off-loop so a stalled TCP send
+    // (congested uplink) can't freeze the reader loop: pings keep being
+    // scheduled, server events keep flowing, and — critically — the pong
+    // timeout below keeps being checked, which is what detects a wedged
+    // socket and forces a reconnect. Before this split, a blocked inline
+    // write froze the whole select loop for the duration of the stall
+    // (26.5s observed on 2026-07-18) with the timeout never firing.
+    let (data_tx, mut data_rx) = mpsc::channel::<Message>(WRITER_QUEUE_SIZE);
+    // Dedicated ping lane, polled first, so keepalives never queue behind
+    // buffered audio frames.
+    let (ping_tx, mut ping_rx) = mpsc::channel::<Message>(2);
+    let mut writer = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                biased;
+                msg = ping_rx.recv() => {
+                    match msg {
+                        Some(msg) => {
+                            if let Err(e) = ws_write.send(msg).await {
+                                warn!("WebSocket ping write failed: {e}");
+                                return;
+                            }
+                        }
+                        // Reader loop ended — flush remaining frames, then
+                        // close the socket gracefully.
+                        None => {
+                            while let Some(msg) = data_rx.recv().await {
+                                if ws_write.send(msg).await.is_err() {
+                                    return;
+                                }
+                            }
+                            let _ = ws_write.close().await;
+                            return;
+                        }
+                    }
+                }
+                msg = data_rx.recv() => {
+                    match msg {
+                        Some(msg) => {
+                            if let Err(e) = ws_write.send(msg).await {
+                                warn!("WebSocket write failed: {e}");
+                                return;
+                            }
+                        }
+                        // None = lane drained AND closed (teardown): nothing
+                        // left to flush, close the socket gracefully.
+                        None => {
+                            let _ = ws_write.close().await;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    });
+
     // Ping keepalive with pong timeout
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(5));
     ping_interval.tick().await;
@@ -246,21 +318,37 @@ async fn do_connection(
 
     let mut result = ConnectionResult::Reconnect;
 
+    // One-slot forwarding: hold at most one decoded command while waiting
+    // for writer-queue space, so a stalled writer exerts backpressure into
+    // the ws_cmd channel (and from there into the router's SendQueue)
+    // instead of freezing this loop.
+    let mut forward_slot: Option<Message> = None;
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
                 info!("WebSocket cancelled");
-                let _ = ws_write.close().await;
                 result = ConnectionResult::Done;
                 break;
             }
 
             _ = ping_interval.tick() => {
-                if let Err(e) = ws_write.send(Message::Ping(vec![].into())).await {
-                    warn!("Ping failed: {e}");
-                    break;
+                // try_send: a full ping lane means the writer is wedged
+                // mid-write; the enqueue-time stamp of the still-unsent
+                // ping will trip the pong timeout below. Stamping at
+                // enqueue (not at socket write) is deliberate — it makes
+                // the timeout measure end-to-end write health.
+                //
+                // Only re-stamp once the previous ping was answered: an
+                // outstanding ping's stamp must survive so pong LOSS
+                // (dead inbound with healthy writes) also trips the
+                // timeout — otherwise 5s refreshes keep elapsed() < 10s
+                // forever on a half-open connection.
+                if ping_tx.try_send(Message::Ping(vec![].into())).is_ok()
+                    && last_ping.is_none_or(|t| last_pong >= t)
+                {
+                    last_ping = Some(std::time::Instant::now());
                 }
-                last_ping = Some(std::time::Instant::now());
             }
 
             _ = pong_check.tick() => {
@@ -272,37 +360,27 @@ async fn do_connection(
                 }
             }
 
-            // Forward commands from Audio Router → WebSocket
-            cmd = ws_cmd_rx.recv() => {
+            // Pull the next router command once the previous one has been
+            // handed to the writer.
+            cmd = ws_cmd_rx.recv(), if forward_slot.is_none() => {
                 match cmd {
-                    Some(WsCommand::SendAudio { audio_b64 }) => {
-                        let msg = serde_json::to_string(&AudioBufferAppend {
-                            r#type: "input_audio_buffer.append",
-                            audio: audio_b64,
-                        })?;
-                        if let Err(e) = ws_write.send(Message::Text(msg.into())).await {
-                            warn!("Failed to send audio: {e}");
-                            break;
-                        }
-                    }
-                    Some(WsCommand::Commit { utterance_duration_ms }) => {
-                        // Trigger transcription of everything appended since the
-                        // last commit. Server emits .completed after this fires.
-                        // We track the duration here so the next .completed can
-                        // be attached to it (FIFO ordering of commits and
-                        // completions guarantees correctness).
-                        pending_durations.push_back(utterance_duration_ms);
-                        if let Err(e) = ws_write
-                            .send(Message::Text(r#"{"type":"input_audio_buffer.commit"}"#.into()))
-                            .await
-                        {
-                            warn!("Failed to send commit: {e}");
-                            break;
-                        }
+                    Some(cmd) => {
+                        forward_slot = Some(command_to_message(cmd, &mut pending_durations)?);
                     }
                     None => {
                         info!("Command channel closed");
                         result = ConnectionResult::Done;
+                        break;
+                    }
+                }
+            }
+
+            // Hand the held command to the writer once it has queue space.
+            permit = data_tx.reserve(), if forward_slot.is_some() => {
+                match permit {
+                    Ok(permit) => permit.send(forward_slot.take().expect("guarded by is_some")),
+                    Err(_) => {
+                        warn!("Writer task gone — reconnecting");
                         break;
                     }
                 }
@@ -380,7 +458,44 @@ async fn do_connection(
         }
     }
 
+    // Let the writer flush queued frames and send a close frame; abort if
+    // the socket is too wedged to finish in time.
+    drop(data_tx);
+    drop(ping_tx);
+    if tokio::time::timeout(std::time::Duration::from_secs(3), &mut writer)
+        .await
+        .is_err()
+    {
+        writer.abort();
+    }
+
     Ok(result)
+}
+
+/// Convert a router command into its wire message. For commits, records the
+/// local-VAD utterance duration in the FIFO that `conversation.item.created`
+/// pops — this MUST happen exactly once per commit forwarded, in forward
+/// order, or every later item inherits the wrong duration (the desync class
+/// from INCIDENTS.md 2026-07-14).
+fn command_to_message(
+    cmd: WsCommand,
+    pending_durations: &mut std::collections::VecDeque<Option<u64>>,
+) -> anyhow::Result<Message> {
+    match cmd {
+        WsCommand::SendAudio { audio_b64 } => {
+            let msg = serde_json::to_string(&AudioBufferAppend {
+                r#type: "input_audio_buffer.append",
+                audio: audio_b64,
+            })?;
+            Ok(Message::Text(msg.into()))
+        }
+        WsCommand::Commit { utterance_duration_ms } => {
+            pending_durations.push_back(utterance_duration_ms);
+            Ok(Message::Text(
+                r#"{"type":"input_audio_buffer.commit"}"#.into(),
+            ))
+        }
+    }
 }
 
 /// Action to take after processing a server event.
@@ -639,6 +754,34 @@ mod tests {
                 ("item_B".to_string(), Some(2000)),
             ]
         );
+    }
+
+    /// Forwarding a Commit must record its duration exactly once and emit
+    /// the commit frame; forwarding audio must not touch the duration FIFO.
+    /// This pairing invariant is what keeps late completions correctly
+    /// attributed (INCIDENTS.md 2026-07-14).
+    #[tokio::test]
+    async fn command_forwarding_preserves_duration_pairing() {
+        let mut durs = std::collections::VecDeque::new();
+
+        let msg = command_to_message(
+            WsCommand::SendAudio { audio_b64: "QUJD".into() },
+            &mut durs,
+        )
+        .unwrap();
+        assert!(durs.is_empty(), "audio must not touch the duration FIFO");
+        let Message::Text(text) = msg else { panic!("expected text frame") };
+        assert!(text.contains("input_audio_buffer.append"));
+        assert!(text.contains("QUJD"));
+
+        let msg = command_to_message(
+            WsCommand::Commit { utterance_duration_ms: Some(1234) },
+            &mut durs,
+        )
+        .unwrap();
+        assert_eq!(durs, [Some(1234)], "exactly one duration per commit");
+        let Message::Text(text) = msg else { panic!("expected text frame") };
+        assert!(text.contains("input_audio_buffer.commit"));
     }
 
     /// A server-rejected commit produces no item.created; its orphaned

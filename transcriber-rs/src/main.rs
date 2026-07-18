@@ -7,6 +7,7 @@ mod error;
 mod filters;
 mod messages;
 mod metrics;
+mod send_queue;
 mod transcript;
 mod typer;
 mod vad_debug;
@@ -28,6 +29,11 @@ use messages::{AudioChunk, AudioEvent, MetricsEvent, TranscriptEvent, TypeComman
 /// Events: smaller since they're event-driven, not continuous.
 const AUDIO_CHANNEL_SIZE: usize = 1024;
 const EVENT_CHANNEL_SIZE: usize = 256;
+/// ws_cmd is deliberately shallow (~1.4s of audio): the durable backlog
+/// lives in the audio router's SendQueue, which survives reconnects —
+/// whatever sits in this channel is drained and discarded when a new
+/// session starts, so keeping it small minimizes that loss.
+const WS_CMD_CHANNEL_SIZE: usize = 32;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -60,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
     // ── Create channels ──────────────────────────────────────────────
 
     let (audio_tx, audio_rx) = mpsc::channel::<AudioChunk>(AUDIO_CHANNEL_SIZE);
-    let (ws_cmd_tx, mut ws_cmd_rx) = mpsc::channel::<WsCommand>(EVENT_CHANNEL_SIZE);
+    let (ws_cmd_tx, mut ws_cmd_rx) = mpsc::channel::<WsCommand>(WS_CMD_CHANNEL_SIZE);
     let (audio_event_tx, audio_event_rx) = mpsc::channel::<AudioEvent>(EVENT_CHANNEL_SIZE);
     let (transcript_tx, transcript_rx) = mpsc::channel::<TranscriptEvent>(EVENT_CHANNEL_SIZE);
     let (type_tx, type_rx) = mpsc::channel::<TypeCommand>(EVENT_CHANNEL_SIZE);
@@ -177,7 +183,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Start audio capture
-    audio_device::start_audio_capture(audio_tx, root_token.child_token())?;
+    audio_device::start_audio_capture(audio_tx, metrics_tx.clone(), root_token.child_token())?;
     println!("[INFO] Starting audio capture...");
 
     // ── Reconnection loop ────────────────────────────────────────────

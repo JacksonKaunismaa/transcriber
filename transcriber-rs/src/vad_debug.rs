@@ -38,6 +38,9 @@ struct Snapshot {
     /// True when audio capture is paused (mic mute) — widget renders a
     /// muted indicator and lets the sparkline freeze.
     paused: bool,
+    /// Audio duration queued locally behind a slow websocket (network
+    /// backpressure) — widget shows a buffering indicator when nonzero.
+    backlog_ms: u64,
     /// (ms_since_writer_start, probability), oldest first.
     history: Vec<(u64, f32)>,
 }
@@ -49,6 +52,7 @@ pub struct VadDebugWriter {
     start: Instant,
     frames_since_flush: u32,
     last_prob: f32,
+    backlog_ms: u64,
     speech_start_threshold: f32,
     speech_continue_threshold: f32,
     speech_start_frames: u32,
@@ -70,6 +74,7 @@ impl VadDebugWriter {
             start: Instant::now(),
             frames_since_flush: 0,
             last_prob: 0.0,
+            backlog_ms: 0,
             speech_start_threshold,
             speech_continue_threshold,
             speech_start_frames,
@@ -121,6 +126,11 @@ impl VadDebugWriter {
         self.history.clear();
     }
 
+    /// Update the send-backlog gauge included in subsequent snapshots.
+    pub fn set_backlog_ms(&mut self, ms: u64) {
+        self.backlog_ms = ms;
+    }
+
     fn write(
         &mut self,
         in_speech: bool,
@@ -144,6 +154,7 @@ impl VadDebugWriter {
             consecutive_speech,
             consecutive_silence,
             paused,
+            backlog_ms: self.backlog_ms,
             history: self.history.iter().copied().collect(),
         };
 

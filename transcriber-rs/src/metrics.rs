@@ -135,7 +135,24 @@ struct Metrics {
     connected: bool,
     ping_rtt_ema: Ema,
     transcription_rtt_ema: Ema,
+    /// When the last ping RTT sample arrived. A connection whose writes are
+    /// wedged produces no pong samples, so the EMA silently holds its last
+    /// (possibly healthy) value — staleness here is itself a degraded signal.
+    last_ping_sample_at: Option<Instant>,
+    /// Gauge: audio queued router-side behind a slow websocket.
+    send_backlog_ms: u64,
+    /// Cumulative audio dropped from the router's send queue (backlog cap).
+    net_dropped_chunks: u64,
+    net_dropped_ms: u64,
+    net_dropped_commits: u64,
+    /// Cumulative chunks the capture callback failed to hand off.
+    capture_dropped_chunks: u64,
 }
+
+/// No pong sample for this long while connected means the ping signal is
+/// stale (pings every 5s → 3 consecutive lost rounds), i.e. the connection
+/// is wedged even if the EMA still holds a healthy-looking value.
+const PING_STALE_AFTER: Duration = Duration::from_secs(15);
 
 impl Metrics {
     fn new() -> Self {
@@ -155,7 +172,33 @@ impl Metrics {
             connected: false,
             ping_rtt_ema: Ema::new(60.0),
             transcription_rtt_ema: Ema::new(60.0),
+            last_ping_sample_at: None,
+            send_backlog_ms: 0,
+            net_dropped_chunks: 0,
+            net_dropped_ms: 0,
+            net_dropped_commits: 0,
+            capture_dropped_chunks: 0,
         }
+    }
+
+    /// Compute current health from connection state and latency signals.
+    fn compute_health(&self) -> &'static str {
+        if !self.connected {
+            "error"
+        } else if self.is_latency_degraded() || self.ping_signal_stale() {
+            "degraded"
+        } else {
+            "ok"
+        }
+    }
+
+    /// True when we're nominally connected but pong samples stopped arriving
+    /// — a wedged connection the EMA can't see (it just holds its last value).
+    fn ping_signal_stale(&self) -> bool {
+        self.connected
+            && self
+                .last_ping_sample_at
+                .is_some_and(|t| t.elapsed() > PING_STALE_AFTER)
     }
 
     fn apply(&mut self, event: MetricsEvent) {
@@ -164,6 +207,9 @@ impl Metrics {
             MetricsEvent::ConnectionSuccess => {
                 self.connection_successes += 1;
                 self.connected = true;
+                // Grace-restart the staleness clock — the first pong of a
+                // fresh connection takes a few seconds to arrive.
+                self.last_ping_sample_at = Some(Instant::now());
                 self.update_health();
             }
             MetricsEvent::SessionExpiration => self.session_expirations += 1,
@@ -173,6 +219,17 @@ impl Metrics {
                 self.update_health();
             }
             MetricsEvent::AudioChunkSent => {} // not tracked
+            MetricsEvent::SendBacklog { ms } => {
+                self.send_backlog_ms = ms;
+            }
+            MetricsEvent::AudioDropped { chunks, ms, commits } => {
+                self.net_dropped_chunks += chunks;
+                self.net_dropped_ms += ms;
+                self.net_dropped_commits += commits;
+            }
+            MetricsEvent::CaptureDropped { chunks } => {
+                self.capture_dropped_chunks += chunks;
+            }
             MetricsEvent::RealtimeTranscription => {
                 self.realtime_transcriptions += 1;
                 self.recent.push(Outcome::Realtime);
@@ -199,6 +256,7 @@ impl Metrics {
             MetricsEvent::ApiError => self.api_errors += 1,
             MetricsEvent::PingRtt { millis } => {
                 self.ping_rtt_ema.update(millis as f64);
+                self.last_ping_sample_at = Some(Instant::now());
                 self.update_health();
             }
             MetricsEvent::TranscriptionRtt { millis, .. } => {
@@ -233,12 +291,20 @@ impl Metrics {
             filtered: self.content_filtered,
         };
 
+        // v6 schema: backlog gauge + drop counters appended (2026-07-18,
+        // network-backpressure hardening).
         let stats = format!(
             "METRICS [{minutes}m] | rss:{rss_mb:.0}MB | {ping_stats} | {rtt_stats} | \
              5m: {w5m} | 15m: {w15m} | 1h: {w1h} | all: {wall} | \
              dupes:{dupes} | \
              conn:{cs}/{ca} expires:{se} reconnects:{ra} | \
-             errors: ws={we} api={ae}",
+             errors: ws={we} api={ae} | \
+             backlog:{backlog}ms dropped: net={nd}({ndms}ms)/{ndc}c mic={cd}",
+            backlog = self.send_backlog_ms,
+            nd = self.net_dropped_chunks,
+            ndms = self.net_dropped_ms,
+            ndc = self.net_dropped_commits,
+            cd = self.capture_dropped_chunks,
             w5m = w5m.format(),
             w15m = w15m.format(),
             w1h = w1h.format(),
@@ -259,14 +325,8 @@ impl Metrics {
         // With local VAD + manual commits, the realtime path doesn't have a
         // success/failure-rate signal anymore (every commit succeeds or the
         // WS is dead). Health is driven purely by connection state and
-        // sustained latency.
-        let health = if !self.connected {
-            "error"
-        } else if self.is_latency_degraded() {
-            "degraded"
-        } else {
-            "ok"
-        };
+        // sustained latency / ping-signal staleness.
+        let health = self.compute_health();
         if health != self.last_health {
             self.last_health = health;
             write_health_file(health);
@@ -311,6 +371,12 @@ pub async fn run_metrics_task(
     let mut log_interval = tokio::time::interval(Duration::from_secs(60));
     log_interval.tick().await; // Consume initial tick
 
+    // Health depends on wall-clock staleness (ping_signal_stale), not just
+    // events — a wedged connection stops producing events entirely, so
+    // re-evaluate periodically or the health file freezes on a stale "ok".
+    let mut health_interval = tokio::time::interval(Duration::from_secs(5));
+    health_interval.tick().await;
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
@@ -320,6 +386,9 @@ pub async fn run_metrics_task(
             }
             _ = log_interval.tick() => {
                 metrics.log_stats();
+            }
+            _ = health_interval.tick() => {
+                metrics.update_health();
             }
             event = rx.recv() => {
                 match event {
@@ -343,4 +412,47 @@ fn get_rss_mb() -> f64 {
                 .map(|kb| kb / 1024.0)
         })
         .unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The 2026-07-18 incident signature: during a wedged connection the
+    /// select loop froze, no pong samples arrived, and the EMA held a stale
+    /// 94ms reading — health claimed better than reality. Sample staleness
+    /// itself must degrade health.
+    #[test]
+    fn stale_ping_signal_degrades_health_while_connected() {
+        let mut m = Metrics::new();
+        m.connected = true;
+        m.ping_rtt_ema.update(50.0);
+        m.last_ping_sample_at = Some(Instant::now() - Duration::from_secs(20));
+        assert_eq!(m.compute_health(), "degraded");
+    }
+
+    #[test]
+    fn fresh_pings_with_low_ema_report_ok() {
+        let mut m = Metrics::new();
+        m.connected = true;
+        m.ping_rtt_ema.update(50.0);
+        m.last_ping_sample_at = Some(Instant::now());
+        assert_eq!(m.compute_health(), "ok");
+    }
+
+    #[test]
+    fn sustained_high_ping_ema_degrades_health() {
+        let mut m = Metrics::new();
+        m.connected = true;
+        m.ping_rtt_ema.update(800.0);
+        m.last_ping_sample_at = Some(Instant::now());
+        assert_eq!(m.compute_health(), "degraded");
+    }
+
+    #[test]
+    fn disconnected_reports_error_regardless_of_latency() {
+        let mut m = Metrics::new();
+        m.connected = false;
+        assert_eq!(m.compute_health(), "error");
+    }
 }

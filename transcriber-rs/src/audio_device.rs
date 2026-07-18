@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use crate::messages::AudioChunk;
+use crate::messages::{AudioChunk, MetricsEvent};
 
 /// Shared pause state — toggled by SIGUSR1 from mic-toggle.sh.
 /// When paused, the cpal stream is paused; the patched cpal worker
@@ -48,6 +48,7 @@ const REBUILD_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 fn try_build_stream(
     host: &cpal::Host,
     tx: &mpsc::Sender<AudioChunk>,
+    metrics_tx: &mpsc::Sender<MetricsEvent>,
     error_count: &Arc<AtomicU64>,
 ) -> Option<(cpal::Stream, String)> {
     let configs_to_try = [
@@ -96,6 +97,7 @@ fn try_build_stream(
 
         for config in &configs_to_try {
             let tx_clone = tx.clone();
+            let metrics_clone = metrics_tx.clone();
             let err_count = Arc::clone(error_count);
 
             match device.build_input_stream(
@@ -104,7 +106,12 @@ fn try_build_stream(
                     let chunk = AudioChunk {
                         data: data.to_vec(),
                     };
-                    let _ = tx_clone.try_send(chunk);
+                    // try_send only (RT callback must not block). A full
+                    // channel means the router is wedged — count the loss
+                    // so it shows up in METRICS instead of vanishing.
+                    if tx_clone.try_send(chunk).is_err() {
+                        let _ = metrics_clone.try_send(MetricsEvent::CaptureDropped { chunks: 1 });
+                    }
                 },
                 move |err| {
                     let n = err_count.fetch_add(1, Ordering::Relaxed);
@@ -136,6 +143,7 @@ fn try_build_stream(
 /// waits briefly, and rebuilds.
 pub fn start_audio_capture(
     tx: mpsc::Sender<AudioChunk>,
+    metrics_tx: mpsc::Sender<MetricsEvent>,
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
     std::thread::spawn(move || {
@@ -152,7 +160,7 @@ pub fn start_audio_capture(
             error_count.store(0, Ordering::Relaxed);
 
             let Some((stream, device_name)) =
-                try_build_stream(&host, &tx, &error_count)
+                try_build_stream(&host, &tx, &metrics_tx, &error_count)
             else {
                 consecutive_rebuilds += 1;
                 if consecutive_rebuilds > MAX_REBUILDS {

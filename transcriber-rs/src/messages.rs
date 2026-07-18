@@ -71,7 +71,16 @@ pub enum MetricsEvent {
     ConnectionSuccess,
     SessionExpiration,
     ReconnectionAttempt,
+    /// Parked 2026-07-18: was emitted per audio chunk but never tracked.
+    #[allow(dead_code)]
     AudioChunkSent,
+    /// Gauge: audio duration waiting in the router's local send queue
+    /// because the websocket can't keep up (network backpressure).
+    SendBacklog { ms: u64 },
+    /// Router send-queue overflow — audio dropped past the backlog cap.
+    AudioDropped { chunks: u64, ms: u64, commits: u64 },
+    /// cpal capture callback couldn't hand off a chunk (audio channel full).
+    CaptureDropped { chunks: u64 },
     RealtimeTranscription,
     // Parked fallback variants — kept so the whisper-1 REST fallback can be
     // revived without re-defining the enum. See INCIDENTS.md.

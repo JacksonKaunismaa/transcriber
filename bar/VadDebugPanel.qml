@@ -28,6 +28,7 @@ Scope {
     property var history: []           // array of [ms_from_start, prob]
     property real writtenAtUnixMs: 0
     property bool snapshotFresh: false
+    property int backlogMs: 0          // audio queued behind a slow websocket
 
     // Stale detector: snapshots older than 2s = transcriber stopped/crashed.
     // Also retries reload() when the snapshot is stale so the widget appears
@@ -66,6 +67,7 @@ Scope {
                 root.speechStartFrames = s.speech_start_frames
                 root.silenceStopFrames = s.silence_stop_frames
                 root.history = s.history
+                root.backlogMs = s.backlog_ms || 0
                 root.writtenAtUnixMs = s.written_at_unix_ms
                 // Compute freshness from the snapshot's own timestamp — the
                 // file may still exist as garbage from a previously-crashed
@@ -130,11 +132,17 @@ Scope {
                         height: 22
                         radius: 4
                         // Panel hides entirely when muted (see panel.visible),
-                        // so only the live IN SPEECH / IDLE states render here.
-                        color: root.inSpeech ? "#316340" : "#404048"
+                        // so only live states render here. A nonzero backlog
+                        // means audio is queued behind a slow network — show
+                        // that instead of vanishing (2026-07-18 incident).
+                        property bool buffering: root.backlogMs > 1500
+                        color: buffering ? "#7a5a20"
+                             : root.inSpeech ? "#316340" : "#404048"
                         Text {
                             anchors.centerIn: parent
-                            text: root.inSpeech ? "IN SPEECH" : "IDLE"
+                            text: parent.buffering
+                                  ? "BUF " + Math.round(root.backlogMs / 1000) + "s"
+                                  : root.inSpeech ? "IN SPEECH" : "IDLE"
                             color: "white"
                             font.pixelSize: 11
                             font.bold: true
