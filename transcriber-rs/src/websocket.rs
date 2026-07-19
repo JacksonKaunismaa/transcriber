@@ -305,12 +305,15 @@ async fn do_connection(
         }
     });
 
-    // Ping keepalive with pong timeout
+    // Ping keepalive with silence timeout. `last_inbound` (any received
+    // message) is the liveness signal — NOT pongs alone: this server pongs
+    // lazily during active streaming, so pong-age is not a health measure.
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(5));
     ping_interval.tick().await;
     let mut last_ping: Option<std::time::Instant> = None;
     let mut last_pong = std::time::Instant::now();
-    let ping_timeout = std::time::Duration::from_secs(10);
+    let mut last_inbound = std::time::Instant::now();
+    let ping_timeout = std::time::Duration::from_secs(15);
 
     // Check pong timeout every 5s
     let mut pong_check = tokio::time::interval(std::time::Duration::from_secs(5));
@@ -352,11 +355,12 @@ async fn do_connection(
             }
 
             _ = pong_check.tick() => {
-                if let Some(ping_time) = last_ping {
-                    if ping_time.elapsed() > ping_timeout && last_pong < ping_time {
-                        warn!("Pong timeout (no pong within {}s of last ping)", ping_timeout.as_secs());
-                        break;
-                    }
+                if connection_silent(last_ping, last_inbound, ping_timeout) {
+                    warn!(
+                        "Connection silent: ping unanswered for {}s with no other inbound traffic — reconnecting",
+                        ping_timeout.as_secs(),
+                    );
+                    break;
                 }
             }
 
@@ -388,6 +392,9 @@ async fn do_connection(
 
             // Read server events
             msg = ws_read.next() => {
+                if let Some(Ok(_)) = &msg {
+                    last_inbound = std::time::Instant::now();
+                }
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         // Raw event dump for protocol debugging. Set DUMP_WS_EVENTS=1.
@@ -428,12 +435,19 @@ async fn do_connection(
                         }
                     }
                     Some(Ok(Message::Pong(_))) => {
-                        last_pong = std::time::Instant::now();
                         if let Some(ping_time) = last_ping {
+                            // Only the first pong after a stamp pairs with
+                            // that ping; and lazy pongs (>5s — the gateway
+                            // deprioritizes them under streaming load)
+                            // measure server scheduling, not network. Skip
+                            // both so the EMA stays a network signal.
                             let rtt_ms = ping_time.elapsed().as_millis() as u64;
-                            debug!("Ping RTT: {rtt_ms}ms");
-                            metrics_tx.send(MetricsEvent::PingRtt { millis: rtt_ms }).await.ok();
+                            if last_pong < ping_time && rtt_ms <= 5000 {
+                                debug!("Ping RTT: {rtt_ms}ms");
+                                metrics_tx.send(MetricsEvent::PingRtt { millis: rtt_ms }).await.ok();
+                            }
                         }
+                        last_pong = std::time::Instant::now();
                     }
                     Some(Ok(Message::Close(frame))) => {
                         let code = frame.as_ref().map(|f| f.code);
@@ -496,6 +510,21 @@ fn command_to_message(
             ))
         }
     }
+}
+
+/// Reconnect only when the connection is truly silent: an outstanding ping
+/// has gone unanswered for `timeout` AND nothing else has arrived since it
+/// was enqueued. Pong-only liveness is WRONG for this server: OpenAI's
+/// gateway answers pings lazily during active streaming (pongs observed
+/// 5-20s behind while transcriptions round-trip in ~500ms), so a healthy
+/// connection under dictation routinely has >10s-old unanswered pings
+/// (2026-07-18 evening regression — see INCIDENTS.md).
+fn connection_silent(
+    last_ping: Option<std::time::Instant>,
+    last_inbound: std::time::Instant,
+    timeout: std::time::Duration,
+) -> bool {
+    last_ping.is_some_and(|ping| ping.elapsed() > timeout && last_inbound < ping)
 }
 
 /// Action to take after processing a server event.
@@ -754,6 +783,34 @@ mod tests {
                 ("item_B".to_string(), Some(2000)),
             ]
         );
+    }
+
+    /// Replay of the 2026-07-18 evening regression: a transcription
+    /// completed 287ms before the pong timeout killed the connection.
+    /// Any inbound traffic since the outstanding ping proves liveness —
+    /// lazy pongs alone must never trigger a reconnect.
+    #[test]
+    fn inbound_traffic_vetoes_pong_timeout() {
+        let now = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(15);
+
+        // Ping enqueued 20s ago, never answered — but a completion arrived
+        // 300ms ago. Alive: do not reconnect.
+        let stale_ping = Some(now - std::time::Duration::from_secs(20));
+        let fresh_inbound = now - std::time::Duration::from_millis(300);
+        assert!(!connection_silent(stale_ping, fresh_inbound, timeout));
+
+        // Same stale ping and NOTHING received since it was enqueued —
+        // truly silent: reconnect. (The original incident's wedge.)
+        let silent_since = now - std::time::Duration::from_secs(25);
+        assert!(connection_silent(stale_ping, silent_since, timeout));
+
+        // Outstanding ping is recent — not silent yet, even with old inbound.
+        let fresh_ping = Some(now - std::time::Duration::from_secs(5));
+        assert!(!connection_silent(fresh_ping, silent_since, timeout));
+
+        // No ping outstanding — nothing to time out against.
+        assert!(!connection_silent(None, silent_since, timeout));
     }
 
     /// Forwarding a Commit must record its duration exactly once and emit

@@ -135,10 +135,13 @@ struct Metrics {
     connected: bool,
     ping_rtt_ema: Ema,
     transcription_rtt_ema: Ema,
-    /// When the last ping RTT sample arrived. A connection whose writes are
-    /// wedged produces no pong samples, so the EMA silently holds its last
-    /// (possibly healthy) value — staleness here is itself a degraded signal.
-    last_ping_sample_at: Option<Instant>,
+    /// When we last saw evidence the connection works: a ping RTT sample OR
+    /// completed transcription activity. A wedged connection produces
+    /// neither, so the EMA silently holds its last (possibly healthy) value
+    /// — staleness here is itself a degraded signal. Transcriptions count
+    /// because the gateway pongs lazily during streaming (filtered from
+    /// sampling), so ping samples alone go quiet on healthy connections.
+    last_liveness_at: Option<Instant>,
     /// Gauge: audio queued router-side behind a slow websocket.
     send_backlog_ms: u64,
     /// Cumulative audio dropped from the router's send queue (backlog cap).
@@ -149,9 +152,9 @@ struct Metrics {
     capture_dropped_chunks: u64,
 }
 
-/// No pong sample for this long while connected means the ping signal is
-/// stale (pings every 5s → 3 consecutive lost rounds), i.e. the connection
-/// is wedged even if the EMA still holds a healthy-looking value.
+/// No liveness evidence (ping sample or transcription) for this long while
+/// connected means the connection is wedged even if the EMA still holds a
+/// healthy-looking value.
 const PING_STALE_AFTER: Duration = Duration::from_secs(15);
 
 impl Metrics {
@@ -172,7 +175,7 @@ impl Metrics {
             connected: false,
             ping_rtt_ema: Ema::new(60.0),
             transcription_rtt_ema: Ema::new(60.0),
-            last_ping_sample_at: None,
+            last_liveness_at: None,
             send_backlog_ms: 0,
             net_dropped_chunks: 0,
             net_dropped_ms: 0,
@@ -185,19 +188,20 @@ impl Metrics {
     fn compute_health(&self) -> &'static str {
         if !self.connected {
             "error"
-        } else if self.is_latency_degraded() || self.ping_signal_stale() {
+        } else if self.is_latency_degraded() || self.liveness_stale() {
             "degraded"
         } else {
             "ok"
         }
     }
 
-    /// True when we're nominally connected but pong samples stopped arriving
-    /// — a wedged connection the EMA can't see (it just holds its last value).
-    fn ping_signal_stale(&self) -> bool {
+    /// True when we're nominally connected but all liveness evidence (ping
+    /// samples, transcription activity) stopped arriving — a wedged
+    /// connection the EMA can't see (it just holds its last value).
+    fn liveness_stale(&self) -> bool {
         self.connected
             && self
-                .last_ping_sample_at
+                .last_liveness_at
                 .is_some_and(|t| t.elapsed() > PING_STALE_AFTER)
     }
 
@@ -209,7 +213,7 @@ impl Metrics {
                 self.connected = true;
                 // Grace-restart the staleness clock — the first pong of a
                 // fresh connection takes a few seconds to arrive.
-                self.last_ping_sample_at = Some(Instant::now());
+                self.last_liveness_at = Some(Instant::now());
                 self.update_health();
             }
             MetricsEvent::SessionExpiration => self.session_expirations += 1,
@@ -233,6 +237,7 @@ impl Metrics {
             MetricsEvent::RealtimeTranscription => {
                 self.realtime_transcriptions += 1;
                 self.recent.push(Outcome::Realtime);
+                self.last_liveness_at = Some(Instant::now());
                 self.update_health();
             }
             // Parked variants — kept as no-ops so the events can be sent
@@ -256,11 +261,12 @@ impl Metrics {
             MetricsEvent::ApiError => self.api_errors += 1,
             MetricsEvent::PingRtt { millis } => {
                 self.ping_rtt_ema.update(millis as f64);
-                self.last_ping_sample_at = Some(Instant::now());
+                self.last_liveness_at = Some(Instant::now());
                 self.update_health();
             }
             MetricsEvent::TranscriptionRtt { millis, .. } => {
                 self.transcription_rtt_ema.update(millis as f64);
+                self.last_liveness_at = Some(Instant::now());
                 self.update_health();
             }
         }
@@ -427,7 +433,7 @@ mod tests {
         let mut m = Metrics::new();
         m.connected = true;
         m.ping_rtt_ema.update(50.0);
-        m.last_ping_sample_at = Some(Instant::now() - Duration::from_secs(20));
+        m.last_liveness_at = Some(Instant::now() - Duration::from_secs(20));
         assert_eq!(m.compute_health(), "degraded");
     }
 
@@ -436,7 +442,7 @@ mod tests {
         let mut m = Metrics::new();
         m.connected = true;
         m.ping_rtt_ema.update(50.0);
-        m.last_ping_sample_at = Some(Instant::now());
+        m.last_liveness_at = Some(Instant::now());
         assert_eq!(m.compute_health(), "ok");
     }
 
@@ -445,7 +451,7 @@ mod tests {
         let mut m = Metrics::new();
         m.connected = true;
         m.ping_rtt_ema.update(800.0);
-        m.last_ping_sample_at = Some(Instant::now());
+        m.last_liveness_at = Some(Instant::now());
         assert_eq!(m.compute_health(), "degraded");
     }
 
@@ -454,5 +460,21 @@ mod tests {
         let mut m = Metrics::new();
         m.connected = false;
         assert_eq!(m.compute_health(), "error");
+    }
+
+    /// During dictation the gateway pongs lazily (samples get filtered), so
+    /// ping samples can go quiet on a perfectly healthy connection —
+    /// transcription activity must count as liveness or health would
+    /// false-degrade exactly when the pipeline is working hardest.
+    #[test]
+    fn transcriptions_keep_health_fresh_without_ping_samples() {
+        let mut m = Metrics::new();
+        m.connected = true;
+        m.ping_rtt_ema.update(50.0);
+        m.last_liveness_at = Some(Instant::now() - Duration::from_secs(20));
+        assert_eq!(m.compute_health(), "degraded");
+
+        m.apply(MetricsEvent::RealtimeTranscription);
+        assert_eq!(m.compute_health(), "ok");
     }
 }

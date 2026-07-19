@@ -354,9 +354,12 @@ working), added with the network-backpressure hardening (commit
   off (audio channel full — should stay 0 now that the router never
   blocks).
 
-Health also gains a staleness rule: "degraded" when no pong sample for
->15s while connected (a wedged connection otherwise holds a stale
-healthy-looking EMA).
+Health also gains a staleness rule: "degraded" when no liveness evidence
+(ping RTT sample or transcription activity) for >15s while connected (a
+wedged connection otherwise holds a stale healthy-looking EMA). Ping RTT
+samples are only recorded for pongs arriving within 5s of their ping —
+the gateway answers pings lazily during active streaming, and those lazy
+pongs measure server scheduling, not network health.
 
 ### METRICS Field Reference
 
