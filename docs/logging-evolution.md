@@ -281,7 +281,7 @@ The switch from UTC to local time happened in commit `e246e66` (Mar 9, 2026) via
 
 ---
 
-## METRICS Line Evolution (5 versions)
+## METRICS Line Evolution (6 versions)
 
 ### Version 1: Python (Dec 2025 -- Feb 2026)
 
@@ -318,7 +318,7 @@ METRICS [1m] | rss:34MB | ping ema:126ms | rtt ema:675ms | 5m: rt:3 to:0 (100%) 
 
 Replaced p50/p95 percentiles (computed over last 100 samples in a ring buffer) with time-decayed exponential moving averages (60s half-life). EMA decays toward zero during silence instead of staying frozen at the last value. Health check now uses only ping EMA > 400ms for "degraded" — transcription RTT is logged for diagnostics but doesn't affect health (it's dominated by OpenAI server-side processing, not network latency). Ping interval reduced from 20s to 5s.
 
-### Version 5: Post-fallback removal (May 21, 2026 -- present)
+### Version 5: Post-fallback removal (May 21, 2026 -- Jul 18, 2026)
 
 ```
 METRICS [1m] | rss:72MB | ping ema:102ms | rtt ema:0ms | 5m: rt:5 filt:1 | 15m: rt:5 filt:1 | 1h: rt:5 filt:1 | all: rt:5 filt:1 | dupes:0 | conn:1/1 expires:0 reconnects:0 | errors: ws=0 api=0
@@ -334,6 +334,29 @@ fallback-related fields no longer mean anything:
 
 The parked fallback `MetricsEvent` variants are kept as no-ops so they
 can be re-wired if the fallback is revived (see `INCIDENTS.md`).
+
+### Version 6: Backpressure fields (Jul 18, 2026 -- present)
+
+```
+METRICS [3m] | rss:70MB | ping ema:130ms | rtt - | 5m: rt:0 filt:0 | 15m: rt:0 filt:0 | 1h: rt:0 filt:0 | all: rt:0 filt:0 | dupes:0 | conn:2/9 expires:0 reconnects:8 | errors: ws=7 api=0 | backlog:0ms dropped: net=0(0ms)/0c mic=0
+```
+
+Purely additive tail after the errors block (v5 field extractors keep
+working), added with the network-backpressure hardening (commit
+`56abaad`, INCIDENTS.md "Network backpressure freezes audio pipeline"):
+
+- `backlog:Xms` — gauge: audio waiting in the router's local SendQueue
+  because the websocket can't keep up. Nonzero during dictation means
+  network congestion; the VAD overlay shows an amber "BUF Xs" pill.
+- `dropped: net=N(Nms)/Nc` — cumulative audio chunks (and ms, and
+  commits) dropped past the SendQueue's 120s backlog cap.
+- `mic=N` — cumulative chunks the cpal capture callback failed to hand
+  off (audio channel full — should stay 0 now that the router never
+  blocks).
+
+Health also gains a staleness rule: "degraded" when no pong sample for
+>15s while connected (a wedged connection otherwise holds a stale
+healthy-looking EMA).
 
 ### METRICS Field Reference
 
@@ -360,6 +383,9 @@ can be re-wired if the fallback is revived (see `INCIDENTS.md`).
 | `expires` | Session expirations | v2 |
 | `reconnects` | Reconnection attempts | v2 |
 | `errors: ws=N api=N` | WebSocket and API error counts | v1 |
+| `backlog` | Audio queued behind a slow websocket (ms, gauge) | v6 |
+| `dropped: net=N(Nms)/Nc` | Audio chunks/ms/commits dropped past the 120s backlog cap | v6 |
+| `mic=N` | Capture-callback handoff drops (audio channel full) | v6 |
 
 ---
 
