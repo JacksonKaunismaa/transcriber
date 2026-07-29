@@ -4,8 +4,10 @@
 //! JSON snapshot to `$XDG_RUNTIME_DIR/transcriber_vad.json` every ~160ms.
 //! The widget reads this file via Quickshell's inotify-based FileView.
 //!
-//! Atomic write pattern: serialize → tmp file → rename. Readers never see a
-//! partial file.
+//! Writes are in-place (truncate + write) so the file keeps its inode across
+//! flushes — inotify watchers (the overlay's FileView) survive. Readers may
+//! rarely see a torn write and must tolerate a JSON parse failure by
+//! retrying on the next change event; the overlay already does.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -47,7 +49,6 @@ struct Snapshot {
 
 pub struct VadDebugWriter {
     out_path: PathBuf,
-    tmp_path: PathBuf,
     history: VecDeque<(u64, f32)>,
     start: Instant,
     frames_since_flush: u32,
@@ -67,9 +68,24 @@ impl VadDebugWriter {
         silence_stop_frames: u32,
     ) -> Self {
         let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
+        Self::in_dir(
+            &dir,
+            speech_start_threshold,
+            speech_continue_threshold,
+            speech_start_frames,
+            silence_stop_frames,
+        )
+    }
+
+    fn in_dir(
+        dir: &str,
+        speech_start_threshold: f32,
+        speech_continue_threshold: f32,
+        speech_start_frames: u32,
+        silence_stop_frames: u32,
+    ) -> Self {
         Self {
             out_path: PathBuf::from(format!("{dir}/transcriber_vad.json")),
-            tmp_path: PathBuf::from(format!("{dir}/transcriber_vad.json.tmp")),
             history: VecDeque::with_capacity(HISTORY_CAPACITY),
             start: Instant::now(),
             frames_since_flush: 0,
@@ -162,12 +178,13 @@ impl VadDebugWriter {
             warn!("vad_debug: serialize failed");
             return;
         };
-        if let Err(e) = std::fs::write(&self.tmp_path, &bytes) {
-            warn!("vad_debug: write tmp failed: {e}");
-            return;
-        }
-        if let Err(e) = std::fs::rename(&self.tmp_path, &self.out_path) {
-            warn!("vad_debug: rename failed: {e}");
+        // In-place rewrite (truncate + write), NOT tmp + rename: replacing the
+        // file swaps its inode, which kills inotify watches — the overlay's
+        // FileView then misses updates and its stale-detector blinks the panel
+        // off mid-dictation (INCIDENTS.md 2026-07-28). A torn read during the
+        // non-atomic window is tolerated by the reader (parse-failure retry).
+        if let Err(e) = std::fs::write(&self.out_path, &bytes) {
+            warn!("vad_debug: write failed: {e}");
         }
     }
 }
@@ -177,5 +194,64 @@ impl Drop for VadDebugWriter {
         // Remove the snapshot on clean shutdown so the widget stops drawing
         // stale data. Best-effort.
         let _ = std::fs::remove_file(&self.out_path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::MetadataExt;
+
+    fn writer_in(dir: &std::path::Path) -> VadDebugWriter {
+        VadDebugWriter::in_dir(dir.to_str().unwrap(), 0.4, 0.15, 3, 30)
+    }
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("vad_debug_{tag}_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Regression test for the overlay blink (2026-07-28): rewriting the
+    /// snapshot must keep the file's inode. Replacing it (tmp + rename)
+    /// swaps the inode, which kills inotify watches on the file — the
+    /// Quickshell overlay's FileView then misses updates and the widget's
+    /// stale-detector blinks the panel off mid-dictation.
+    #[test]
+    fn snapshot_rewrite_preserves_inode() {
+        let dir = temp_dir("inode");
+        let mut w = writer_in(&dir);
+
+        w.record(0.5);
+        w.write(true, 1, 0, false);
+        let ino_first = std::fs::metadata(&w.out_path).unwrap().ino();
+
+        w.record(0.6);
+        w.write(true, 2, 0, false);
+        let ino_second = std::fs::metadata(&w.out_path).unwrap().ino();
+
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            ino_first, ino_second,
+            "snapshot rewrite must reuse the inode or inotify watches on it die"
+        );
+    }
+
+    /// Every flush must leave complete, parseable JSON at the snapshot path.
+    #[test]
+    fn snapshot_rewrite_leaves_valid_json() {
+        let dir = temp_dir("json");
+        let mut w = writer_in(&dir);
+
+        for i in 0..20 {
+            w.record(i as f32 / 20.0);
+            w.write(i % 2 == 0, i, 0, false);
+            let bytes = std::fs::read(&w.out_path).unwrap();
+            let parsed: serde_json::Value = serde_json::from_slice(&bytes)
+                .unwrap_or_else(|e| panic!("write {i} left invalid JSON: {e}"));
+            assert!(parsed["written_at_unix_ms"].as_u64().is_some());
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

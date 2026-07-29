@@ -46,6 +46,31 @@ Scope {
         }
     }
 
+    // Debounced visibility: show instantly, hide only after the hide
+    // condition holds for a full grace period. Before this, any single
+    // missed reload or transient load failure unmapped the panel for one
+    // write interval (~160ms) — a visible blink several times a minute
+    // during dictation (2026-07-28 incident). showPanel is a plain
+    // property set imperatively from both paths; visible binds to it.
+    property bool shouldShow: root.snapshotFresh && !root.paused
+    property bool showPanel: false
+    onShouldShowChanged: {
+        if (shouldShow) {
+            hideDelay.stop()
+            root.showPanel = true
+        } else {
+            hideDelay.restart()
+        }
+    }
+    Component.onCompleted: root.showPanel = root.shouldShow
+    Timer {
+        id: hideDelay
+        interval: 800
+        onTriggered: {
+            if (!root.shouldShow) root.showPanel = false
+        }
+    }
+
     FileView {
         id: snapshotView
         path: root.snapshotPath
@@ -89,7 +114,8 @@ Scope {
         id: panel
         // Hidden while the snapshot is stale (transcriber stopped) OR while the
         // mic is muted — the overlay is only useful when audio is live.
-        visible: root.snapshotFresh && !root.paused
+        // Debounced via showPanel above so transient hiccups can't blink it.
+        visible: root.showPanel
         color: "transparent"
 
         WlrLayershell.namespace: "transcriber:vad-debug"
