@@ -26,6 +26,7 @@ const CHANNELS: u16 = 1;
 pub fn dump_to_wav(fallback_buf: &VecDeque<(Instant, Vec<u8>)>) -> Option<PathBuf> {
     if fallback_buf.is_empty() {
         warn!("audio_dump: fallback buffer empty, nothing to dump");
+        notify("Audio dump failed", "Rolling buffer is empty — no audio captured yet");
         return None;
     }
 
@@ -69,7 +70,28 @@ pub fn dump_to_wav(fallback_buf: &VecDeque<(Instant, Vec<u8>)>) -> Option<PathBu
         total_bytes,
         duration_ms,
     );
+    notify(
+        &format!("Saved ~{}s of audio", duration_ms / 1000),
+        &path.display().to_string(),
+    );
     Some(path)
+}
+
+/// Desktop notification — the dump hotkey's only user-visible feedback.
+/// Runs notify-send on a detached thread: the caller is the audio router,
+/// which must never block (notify-send can stall on DBus), and waiting
+/// there also reaps the child so it doesn't linger as a zombie.
+fn notify(summary: &str, body: &str) {
+    let summary = summary.to_string();
+    let body = body.to_string();
+    std::thread::spawn(move || {
+        let result = std::process::Command::new("notify-send")
+            .args(["--app-name=transcriber", "--expire-time=4000", &summary, &body])
+            .status();
+        if let Err(e) = result {
+            warn!("audio_dump: notify-send failed: {e}");
+        }
+    });
 }
 
 fn write_wav_header(file: &mut File, data_bytes: u32) -> std::io::Result<()> {

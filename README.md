@@ -143,7 +143,8 @@ Filter patterns are defined in `filters.yaml` and hot-reloaded when the file cha
 ```
 
 The transcriber always writes a live VAD probability snapshot to
-`$XDG_RUNTIME_DIR/transcriber_vad.json` (~160ms updates, atomic rename).
+`$XDG_RUNTIME_DIR/transcriber_vad.json` (~160ms updates, rewritten
+in place so the file keeps its inode and inotify watches survive).
 The `bar/VadDebugPanel.qml` Quickshell widget reads this via inotify
 and renders a sparkline with threshold lines — useful for diagnosing
 missed soft speech.
@@ -153,8 +154,9 @@ missed soft speech.
 Bind `scripts/dump_audio.sh` to a hotkey (e.g. in Hyprland) to send the
 running transcriber a SIGHUP. The audio router writes its rolling 30s
 fallback buffer to `conversations/audio_dumps/dump_YYYYMMDD_HHMMSS.wav`
-(24kHz mono, raw PCM). Useful for capturing audio behind missed
-transcriptions so they can be re-fed through different VADs.
+(24kHz mono, raw PCM) and confirms with a desktop notification (also
+notifies on failure, e.g. an empty buffer). Useful for capturing audio
+behind missed transcriptions so they can be re-fed through different VADs.
 
 To see all options:
 ```bash
