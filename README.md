@@ -100,9 +100,12 @@ Run the binary from the project root (so it can find `filters.yaml` and `.env`):
 
 ### Latency / accuracy
 
-Transcription uses OpenAI's `gpt-realtime-whisper` — the streaming Whisper
-variant in the GA Realtime API. It pairs with local Silero VAD to endpoint
-utterances (the API rejects server-side VAD for this model).
+Transcription defaults to OpenAI's `gpt-realtime-whisper` — the streaming
+Whisper variant in the GA Realtime API; `--model gpt-live-transcribe` opts in
+to its 2026 successor (better WER per Artificial Analysis; ignores `--delay`;
+manual-commit flow verified by `scratch/test_live_transcribe_smoke.py`). Both
+pair with local Silero VAD to endpoint utterances (the API rejects
+server-side VAD for `gpt-realtime-whisper`).
 
 ```bash
 # Default — delay=high (most accurate)

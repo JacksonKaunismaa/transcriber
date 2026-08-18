@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
 
     deps::check_system_dependencies();
 
-    info!(api_key_len = api_key.len(), delay = %config.delay, "Session starting");
+    info!(api_key_len = api_key.len(), model = %config.model, delay = %config.delay, "Session starting");
 
     // ── Create channels ──────────────────────────────────────────────
 
@@ -209,6 +209,7 @@ async fn main() -> anyhow::Result<()> {
 
         let result = websocket::run_connection(
             &api_key,
+            &config.model,
             &config.delay,
             &mut ws_cmd_rx,
             &audio_event_tx,

@@ -106,6 +106,7 @@ pub enum ConnectionResult {
 /// 4. Returns when disconnected (caller decides whether to reconnect)
 pub async fn run_connection(
     api_key: &str,
+    model: &str,
     delay: &str,
     ws_cmd_rx: &mut mpsc::Receiver<WsCommand>,
     audio_event_tx: &mpsc::Sender<AudioEvent>,
@@ -115,6 +116,7 @@ pub async fn run_connection(
 ) -> ConnectionResult {
     match do_connection(
         api_key,
+        model,
         delay,
         ws_cmd_rx,
         audio_event_tx,
@@ -145,8 +147,6 @@ pub async fn run_connection(
     }
 }
 
-const MODEL: &str = "gpt-realtime-whisper";
-
 /// Writer-task queue depth. Small on purpose: the big backlog lives in the
 /// audio router's SendQueue (send_queue.rs) where it survives reconnects;
 /// anything queued here or in the ws_cmd channel is lost when the
@@ -155,6 +155,7 @@ const WRITER_QUEUE_SIZE: usize = 8;
 
 async fn do_connection(
     api_key: &str,
+    model: &str,
     delay: &str,
     ws_cmd_rx: &mut mpsc::Receiver<WsCommand>,
     audio_event_tx: &mpsc::Sender<AudioEvent>,
@@ -223,7 +224,7 @@ async fn do_connection(
     // Notify transcript task to clear ordering/completion state
     transcript_tx.send(TranscriptEvent::SessionReset).await.ok();
     println!(
-        "[INFO] WebSocket connection established (transcription mode, model: {MODEL})"
+        "[INFO] WebSocket connection established (transcription mode, model: {model})"
     );
 
     // Send session config (GA shape: type:"session.update", session.type:"transcription",
@@ -236,7 +237,7 @@ async fn do_connection(
             audio: AudioConfig {
                 input: AudioInput {
                     transcription: InputAudioTranscription {
-                        model: MODEL.to_string(),
+                        model: model.to_string(),
                         delay: Some(delay.to_string()),
                     },
                 },
@@ -246,7 +247,7 @@ async fn do_connection(
     ws_write
         .send(Message::Text(serde_json::to_string(&session_update)?.into()))
         .await?;
-    info!("Transcription session config sent (model: {MODEL}, delay: {delay})");
+    info!("Transcription session config sent (model: {model}, delay: {delay})");
 
     // ── Writer task ──────────────────────────────────────────────────
     // All further socket writes happen off-loop so a stalled TCP send
