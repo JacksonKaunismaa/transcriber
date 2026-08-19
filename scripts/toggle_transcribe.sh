@@ -81,6 +81,10 @@ if [ ! -x "$TRANSCRIBER" ]; then
     TRANSCRIBER="$UV_PATH run transcribe"
 fi
 
+# A/B trial (2026-08-18): run the newer OpenAI model. Delete this line to
+# revert the keybind to the default gpt-realtime-whisper.
+TRANSCRIBER="$TRANSCRIBER --model gpt-live-transcribe"
+
 # Start transcription in background and save PID
 nohup $TRANSCRIBER > "$LOG_FILE" 2>&1 &
 PID=$!
