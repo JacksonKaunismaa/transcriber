@@ -1,32 +1,111 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use anyhow::{Context, Result};
 use serde::Deserialize;
+use tracing::warn;
 
 /// Check if adaptive typing tools are available.
 pub fn test_adaptive() -> bool {
     which("wl-copy") && which("wtype") && which("hyprctl")
 }
 
-/// Get the window class of the currently focused window via hyprctl.
-pub fn get_focused_window_class() -> String {
-    let output = Command::new("hyprctl")
-        .args(["activewindow", "-j"])
-        .output();
+/// Focused-window lookup via `hyprctl`, resilient to Hyprland restarting
+/// underneath us.
+///
+/// `hyprctl` locates the compositor through `HYPRLAND_INSTANCE_SIGNATURE`,
+/// inherited at process start. If Hyprland restarts while we keep running,
+/// that value goes stale and `hyprctl activewindow` prints
+/// "Couldn't connect to …/.socket.sock" — with exit status 0 — so a status
+/// check passes and only the JSON parse fails. 2026-07-31 → 08-10 exactly this
+/// happened: 571 utterances (all of Claude Code) silently fell through to the
+/// default wtype path with nothing logged. On failure we now re-resolve the
+/// live instance via `hyprctl instances -j` (which scans the runtime dir and
+/// doesn't need the env var) and retry with `-i <signature>`.
+pub struct WindowDetector {
+    /// Instance signature to pass as `hyprctl -i`, set once the inherited env
+    /// var has been found stale.
+    instance_override: Option<String>,
+}
 
-    match output {
-        Ok(o) if o.status.success() => {
-            #[derive(Deserialize)]
-            struct WindowInfo {
-                #[serde(default)]
-                class: String,
-            }
+#[derive(Deserialize)]
+struct WindowInfo {
+    #[serde(default)]
+    class: String,
+}
 
-            serde_json::from_slice::<WindowInfo>(&o.stdout)
-                .map(|w| w.class.to_lowercase())
-                .unwrap_or_default()
+#[derive(Deserialize)]
+struct InstanceInfo {
+    instance: String,
+    time: u64,
+}
+
+impl WindowDetector {
+    pub fn new() -> Self {
+        Self {
+            instance_override: None,
         }
-        _ => String::new(),
+    }
+
+    /// Lowercased class of the focused window. `Ok("")` when Hyprland reports
+    /// no focused window; `Err` when hyprctl can't be reached even after
+    /// re-resolving the instance.
+    pub fn focused_window_class(&mut self) -> Result<String> {
+        let first_err = match self.query_active_window() {
+            Ok(class) => return Ok(class),
+            Err(e) => e,
+        };
+        let sig = self
+            .rediscover_instance()
+            .with_context(|| format!("hyprctl activewindow failed ({first_err:#})"))?;
+        warn!(
+            "hyprctl activewindow failed ({first_err:#}); re-resolved Hyprland instance to \
+             {sig} — compositor restarted under us?"
+        );
+        self.query_active_window()
+    }
+
+    fn query_active_window(&self) -> Result<String> {
+        let mut cmd = Command::new("hyprctl");
+        if let Some(sig) = &self.instance_override {
+            cmd.args(["-i", sig]);
+        }
+        let out = cmd
+            .args(["activewindow", "-j"])
+            .output()
+            .context("spawn hyprctl")?;
+        // hyprctl exits 0 even when it can't reach the socket, so the exit
+        // status is meaningless here; the JSON parse is the real check.
+        let info: WindowInfo = serde_json::from_slice(&out.stdout).with_context(|| {
+            format!(
+                "non-JSON output: stdout={:?} stderr={:?}",
+                String::from_utf8_lossy(&out.stdout).trim(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            )
+        })?;
+        Ok(info.class.to_lowercase())
+    }
+
+    /// Newest running instance per `hyprctl instances -j`, which reads
+    /// `$XDG_RUNTIME_DIR/hypr/` directly and works with a stale env var.
+    fn rediscover_instance(&mut self) -> Result<String> {
+        let out = Command::new("hyprctl")
+            .args(["instances", "-j"])
+            .output()
+            .context("spawn hyprctl instances")?;
+        let instances: Vec<InstanceInfo> = serde_json::from_slice(&out.stdout)
+            .with_context(|| {
+                format!(
+                    "hyprctl instances returned non-JSON: {:?}",
+                    String::from_utf8_lossy(&out.stdout).trim()
+                )
+            })?;
+        let newest = instances
+            .into_iter()
+            .max_by_key(|i| i.time)
+            .context("hyprctl reports no running Hyprland instances")?;
+        self.instance_override = Some(newest.instance.clone());
+        Ok(newest.instance)
     }
 }
 

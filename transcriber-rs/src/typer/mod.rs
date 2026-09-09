@@ -1,12 +1,14 @@
 mod backends;
 mod detection;
 
+use std::sync::{Arc, Mutex};
+
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::messages::TypeCommand;
-use detection::TyperRules;
+use detection::{TyperRules, WindowDetector};
 
 /// Run the Typer task.
 ///
@@ -17,6 +19,9 @@ pub async fn run_typer_task(
     cancel: CancellationToken,
 ) {
     let mut rules = TyperRules::load(None);
+    // Shared with the blocking closures so the re-resolved Hyprland instance
+    // survives across utterances.
+    let detector = Arc::new(Mutex::new(WindowDetector::new()));
 
     // Print initial status
     let status = if detection::test_adaptive() {
@@ -51,8 +56,17 @@ pub async fn run_typer_task(
 
                         rules.reload();
                         let rules_clone = rules.clone();
+                        let detector = Arc::clone(&detector);
                         let blocking = tokio::task::spawn_blocking(move || {
-                            let window_class = detection::get_focused_window_class();
+                            let window_class = match detector.lock().unwrap().focused_window_class() {
+                                Ok(class) => class,
+                                Err(e) => {
+                                    // Fall through to the default method, but loudly:
+                                    // this exact silence hid a 10-day misroute in Aug 2026.
+                                    warn!("Window detection failed, using default typing method: {e:#}");
+                                    String::new()
+                                }
+                            };
                             let method = rules_clone.get_method_for_window(&window_class);
                             info!(window = %window_class, method = %method, "TYPER");
                             backends::type_with_adaptive(&text, &method)
