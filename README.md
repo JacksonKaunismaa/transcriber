@@ -150,7 +150,10 @@ The transcriber always writes a live VAD probability snapshot to
 in place so the file keeps its inode and inotify watches survive).
 The `bar/VadDebugPanel.qml` Quickshell widget reads this via inotify
 and renders a sparkline with threshold lines — useful for diagnosing
-missed soft speech.
+missed soft speech. The overlay is opt-in on the shell side: add
+`PanelLoader { component: VadDebugPanel {} }` to your Quickshell panel
+list to show it, or leave it out when the transcriber is behaving and
+you don't want the sparkline on screen.
 
 ### Dumping audio on demand
 
