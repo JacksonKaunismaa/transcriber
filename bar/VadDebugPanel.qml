@@ -1,10 +1,11 @@
 // VadDebugPanel.qml
 // Live VAD debug overlay. Renders a sparkline of the last 10s of silero
 // probabilities, the start/continue threshold lines, and current state.
-// Visible only when the transcriber is running with `--debug-vad`.
+// Self-hides whenever the snapshot goes stale (transcriber not running) or
+// the mic is muted; the transcriber always writes the snapshot.
 //
 // Wire it up by adding `VadDebugPanel { }` somewhere in your shell.qml (or
-// equivalent root scope).
+// equivalent root scope). Leave it out to disable the overlay entirely.
 import QtQuick
 import Quickshell
 import Quickshell.Io
