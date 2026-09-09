@@ -497,9 +497,7 @@ pub async fn run_audio_router_task(
                                 now.duration_since(last),
                                 ms,
                             );
-                            // No reliable speech duration here — mute/unmute
-                            // mid-utterance; just send None.
-                            send_q.send(&ws_cmd_tx, WsCommand::Commit { utterance_duration_ms: None });
+                            send_q.send(&ws_cmd_tx, WsCommand::Commit { utterance_duration_ms: Some(ms) });
                             vad.reset_after_commit();
                         }
                         vad.prefix_buf.clear();
@@ -563,13 +561,15 @@ pub async fn run_audio_router_task(
                             if vad.bytes_since_commit >= MIN_COMMIT_BYTES {
                                 let ms = (vad.bytes_since_commit * 1000)
                                     / (SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64);
-                                // Approximate speech duration: elapsed since
-                                // we declared start minus the hysteresis wait
-                                // (we declared start SPEECH_START_FRAMES late,
-                                // declared stop SILENCE_STOP_FRAMES late after
-                                // speech actually ended).
+                                // Diagnostic-only speech estimate: elapsed since
+                                // we declared start minus the hysteresis wait.
+                                // It excludes whatever speech landed in the
+                                // pre-roll before silero triggered, so on soft
+                                // onsets it understates badly (a 4-word sentence
+                                // "in 160ms"). Logged for VAD tuning; NOT sent
+                                // downstream — see the Commit below.
                                 let hysteresis_ms = ((SILENCE_STOP_FRAMES - SPEECH_START_FRAMES) as u64) * 32;
-                                let utterance_duration_ms = vad.speech_start_instant.map(|t| {
+                                let speech_ms_estimate = vad.speech_start_instant.map(|t| {
                                     let elapsed = std::time::Instant::now()
                                         .duration_since(t)
                                         .as_millis() as u64;
@@ -577,13 +577,20 @@ pub async fn run_audio_router_task(
                                 });
                                 info!(
                                     "Silero VAD: speech stopped, committing ({ms}ms buffer / ~{}ms speech; peak_p={:.3}, peak_silence={} of {} required, silence_streaks_broken={})",
-                                    utterance_duration_ms.unwrap_or(0),
+                                    speech_ms_estimate.unwrap_or(0),
                                     peak_prob,
                                     vad.peak_silence_in_burst,
                                     SILENCE_STOP_FRAMES,
                                     vad.silence_streaks_broken,
                                 );
-                                send_q.send(&ws_cmd_tx, WsCommand::Commit { utterance_duration_ms });
+                                // Send the committed-audio length, not the speech
+                                // estimate: the transcript covers the whole buffer
+                                // (pre-roll + speech + trailing silence), so this is
+                                // the right denominator for the wps hallucination
+                                // check. 2026-09-09: every speed-rule drop since the
+                                // local-VAD switch was real speech with an
+                                // understated estimate.
+                                send_q.send(&ws_cmd_tx, WsCommand::Commit { utterance_duration_ms: Some(ms) });
                                 vad.reset_after_commit();
                             } else {
                                 debug!(
@@ -616,12 +623,7 @@ pub async fn run_audio_router_task(
                     let ms = (vad.bytes_since_commit * 1000)
                         / (SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64);
                     info!("Max-buffer safety commit triggered ({ms}ms uncommitted)");
-                    // We're mid-utterance — use elapsed since speech_started
-                    // (if known) as a rough duration estimate.
-                    let utterance_duration_ms = vad.speech_start_instant.map(|t| {
-                        std::time::Instant::now().duration_since(t).as_millis() as u64
-                    });
-                    send_q.send(&ws_cmd_tx, WsCommand::Commit { utterance_duration_ms });
+                    send_q.send(&ws_cmd_tx, WsCommand::Commit { utterance_duration_ms: Some(ms) });
                     vad.reset_after_commit();
                 }
             }

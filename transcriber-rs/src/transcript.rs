@@ -502,6 +502,13 @@ fn apply_hallucination_filters(state: &TranscriptState, text: &str) -> String {
 /// Thresholds derived from analysis of 34,448 transcriptions with zero false positives:
 /// - unique_ratio ≤ 0.40: catches repetitive hallucinations ("One more" x30, etc.)
 /// - wps ≥ 10.0: catches fluent but impossibly fast hallucinations (YouTube outros, etc.)
+///
+/// `duration_ms` is the committed-audio length (pre-roll + speech + trailing
+/// silence), which is what the transcript covers. The wps threshold was
+/// calibrated against server-VAD speech spans; against committed audio it's
+/// strictly more conservative. It used to receive a speech-only estimate that
+/// excluded pre-roll, and from 2026-05-22 to 2026-09-09 every drop it made was
+/// real speech ("Can you commit this?" tagged at 160ms).
 fn is_repetition_hallucination(text: &str, duration_ms: Option<u64>) -> bool {
     let words: Vec<&str> = text.split_whitespace().collect();
     let word_count = words.len();
