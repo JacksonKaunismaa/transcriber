@@ -504,11 +504,15 @@ fn apply_hallucination_filters(state: &TranscriptState, text: &str) -> String {
 /// - wps ≥ 10.0: catches fluent but impossibly fast hallucinations (YouTube outros, etc.)
 ///
 /// `duration_ms` is the committed-audio length (pre-roll + speech + trailing
-/// silence), which is what the transcript covers. The wps threshold was
-/// calibrated against server-VAD speech spans; against committed audio it's
-/// strictly more conservative. It used to receive a speech-only estimate that
-/// excluded pre-roll, and from 2026-05-22 to 2026-09-09 every drop it made was
-/// real speech ("Can you commit this?" tagged at 160ms).
+/// silence), which is what the transcript covers. The 10 wps threshold was
+/// calibrated (2026-03) against server-VAD speech spans; against committed
+/// audio it's more conservative. Re-evaluated 2026-09-08 over every paired
+/// commit since the local-VAD switch (6,393 transcripts): real speech peaks at
+/// 6.3 wps of committed audio; the old speech-only estimate (which excluded the
+/// 1s pre-roll and was wall-clock, so it collapsed to ~0 on burst-delivered
+/// audio after unmute) produced six false drops of real sentences and caught
+/// nothing. Known cost: short outros (10–13 words in ~2s) fall below 10 wps of
+/// committed audio — those are filters.yaml's job.
 fn is_repetition_hallucination(text: &str, duration_ms: Option<u64>) -> bool {
     let words: Vec<&str> = text.split_whitespace().collect();
     let word_count = words.len();
@@ -727,5 +731,43 @@ mod tests {
         assert!(state.skipped_items.contains_key("item_A"));
         let cmd = trx.try_recv().expect("B should flush after A is skipped");
         assert_eq!(cmd.text, "second utterance text here");
+    }
+
+    /// Pins the wps calibration against committed-audio durations. The
+    /// "real" cases are verbatim drops from production logs (2026-07-18 /
+    /// 2026-07-12) that the old speech-only estimate rejected at 34 and 11 wps;
+    /// paired with the audio actually committed they must pass. The
+    /// hallucination cases are the fluent blobs from 2026-04 that neither the
+    /// yaml patterns nor the unique-ratio check caught — the speed rule is the
+    /// only defense for that class and must keep firing.
+    #[test]
+    fn speed_rule_calibrated_against_committed_audio() {
+        // 12 words / 2250ms committed (logged as "2250ms buffer / ~352ms speech").
+        assert!(!is_repetition_hallucination(
+            "a bunch of ideas at the bar and see what's six. So",
+            Some(2250)
+        ));
+        // 14 words / 2225ms committed (logged as "~1248ms speech").
+        assert!(!is_repetition_hallucination(
+            "Okay, so like in my head the way this thing works is that um",
+            Some(2225)
+        ));
+        // Fastest real speech observed over 6,393 transcripts: 6.3 wps. Anything
+        // under 10 wps of committed audio must pass.
+        assert!(!is_repetition_hallucination(
+            "one two three four five six seven eight nine ten eleven twelve thirteen fourteen",
+            Some(2225)
+        ));
+        // 30 words over ~1.9s of committed audio (server-VAD era, 2026-04-09).
+        assert!(is_repetition_hallucination(
+            "How do you guys feel? Flip your palms to your left, flip your palms to the right. \
+             Start from the top of your thighs. Both legs. One more, one more.",
+            Some(1740)
+        ));
+        // No duration => speed rule can't fire (only the unique-ratio check remains).
+        assert!(!is_repetition_hallucination(
+            "a bunch of ideas at the bar and see what's six. So",
+            None
+        ));
     }
 }

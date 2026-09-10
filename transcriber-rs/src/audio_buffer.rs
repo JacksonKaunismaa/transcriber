@@ -190,6 +190,16 @@ impl VadState {
         }
     }
 
+    /// Length of audio sent to the server since the last commit — pre-speech
+    /// prefix + speech + trailing silence. This is what a commit's transcript
+    /// covers, so it's what travels with `WsCommand::Commit` for the wps
+    /// hallucination check. (Not the Silero speech estimate: that excludes the
+    /// 1s prefix and is wall-clock, so it collapses when audio arrives in a
+    /// burst after unmute — both produced false "speed hallucination" drops.)
+    fn committed_audio_ms(&self) -> u64 {
+        (self.bytes_since_commit * 1000) / (SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64)
+    }
+
     fn reset_after_commit(&mut self) {
         self.bytes_since_commit = 0;
         self.in_speech = false;
@@ -490,14 +500,13 @@ pub async fn run_audio_router_task(
                 if let Some(last) = vad.last_chunk_at {
                     if now.duration_since(last) > PAUSE_GAP_THRESHOLD {
                         if vad.bytes_since_commit >= MIN_COMMIT_BYTES {
-                            let ms = (vad.bytes_since_commit * 1000)
-                                / (SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64);
+                            let ms = vad.committed_audio_ms();
                             info!(
                                 "Capture resumed after gap ({:?}); committing {}ms of in-flight audio",
                                 now.duration_since(last),
                                 ms,
                             );
-                            send_q.send(&ws_cmd_tx, WsCommand::Commit { utterance_duration_ms: Some(ms) });
+                            send_q.send(&ws_cmd_tx, WsCommand::Commit { committed_audio_ms: Some(ms) });
                             vad.reset_after_commit();
                         }
                         vad.prefix_buf.clear();
@@ -559,8 +568,7 @@ pub async fn run_audio_router_task(
                                 sent_via_prefix_flush = true; // suppress further send below
                             }
                             if vad.bytes_since_commit >= MIN_COMMIT_BYTES {
-                                let ms = (vad.bytes_since_commit * 1000)
-                                    / (SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64);
+                                let ms = vad.committed_audio_ms();
                                 // Diagnostic-only speech estimate: elapsed since
                                 // we declared start minus the hysteresis wait.
                                 // It excludes whatever speech landed in the
@@ -590,7 +598,7 @@ pub async fn run_audio_router_task(
                                 // check. 2026-09-09: every speed-rule drop since the
                                 // local-VAD switch was real speech with an
                                 // understated estimate.
-                                send_q.send(&ws_cmd_tx, WsCommand::Commit { utterance_duration_ms: Some(ms) });
+                                send_q.send(&ws_cmd_tx, WsCommand::Commit { committed_audio_ms: Some(ms) });
                                 vad.reset_after_commit();
                             } else {
                                 debug!(
@@ -620,10 +628,9 @@ pub async fn run_audio_router_task(
                 // Safety: bound how long a single commit can buffer up if VAD
                 // never declares end-of-speech (continuous monologue).
                 if vad.bytes_since_commit >= MAX_BUFFER_BYTES {
-                    let ms = (vad.bytes_since_commit * 1000)
-                        / (SAMPLE_RATE as u64 * BYTES_PER_SAMPLE as u64);
+                    let ms = vad.committed_audio_ms();
                     info!("Max-buffer safety commit triggered ({ms}ms uncommitted)");
-                    send_q.send(&ws_cmd_tx, WsCommand::Commit { utterance_duration_ms: Some(ms) });
+                    send_q.send(&ws_cmd_tx, WsCommand::Commit { committed_audio_ms: Some(ms) });
                     vad.reset_after_commit();
                 }
             }

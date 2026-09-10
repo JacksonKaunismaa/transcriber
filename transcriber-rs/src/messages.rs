@@ -16,13 +16,12 @@ pub enum WsCommand {
     /// Tell the server to finalize the current input buffer and run transcription.
     /// Triggered by local VAD when end-of-utterance is detected. Required because
     /// gpt-realtime-whisper rejects server-side VAD, so the client must endpoint.
-    /// `utterance_duration_ms` is the length of audio being committed — the
+    /// `committed_audio_ms` is the length of audio being committed — the
     /// whole server buffer since the last commit (pre-speech prefix + speech +
     /// trailing silence). Used by the transcript task's wps-based hallucination
     /// filter; it must be the audio the transcript actually covers, not a
-    /// speech-only estimate (which understates on soft onsets and dropped real
-    /// speech — see audio_buffer.rs).
-    Commit { utterance_duration_ms: Option<u64> },
+    /// speech-only estimate (see `VadState::committed_audio_ms`).
+    Commit { committed_audio_ms: Option<u64> },
 }
 
 /// Events from WebSocket task → Audio Router.

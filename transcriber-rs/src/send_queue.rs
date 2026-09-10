@@ -210,7 +210,7 @@ mod tests {
         let mut q = SendQueue::new(10_000, TEST_RATE);
 
         q.send(&tx, chunk('a', 300));
-        q.send(&tx, WsCommand::Commit { utterance_duration_ms: Some(5) });
+        q.send(&tx, WsCommand::Commit { committed_audio_ms: Some(5) });
         q.send(&tx, chunk('b', 300));
 
         // Only 'b' counts toward the audio backlog.
@@ -231,7 +231,7 @@ mod tests {
         let mut q = SendQueue::new(100, TEST_RATE);
 
         q.send(&tx, chunk('a', 60)); // fills the channel
-        q.send(&tx, WsCommand::Commit { utterance_duration_ms: None }); // queued, 0 bytes
+        q.send(&tx, WsCommand::Commit { committed_audio_ms: None }); // queued, 0 bytes
         q.send(&tx, chunk('b', 81)); // queued: 81
         q.send(&tx, chunk('c', 81)); // queued: 162 > 100 → commit + 'b' dropped
 

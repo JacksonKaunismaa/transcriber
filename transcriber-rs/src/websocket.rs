@@ -504,8 +504,8 @@ fn command_to_message(
             })?;
             Ok(Message::Text(msg.into()))
         }
-        WsCommand::Commit { utterance_duration_ms } => {
-            pending_durations.push_back(utterance_duration_ms);
+        WsCommand::Commit { committed_audio_ms } => {
+            pending_durations.push_back(committed_audio_ms);
             Ok(Message::Text(
                 r#"{"type":"input_audio_buffer.commit"}"#.into(),
             ))
@@ -833,7 +833,7 @@ mod tests {
         assert!(text.contains("QUJD"));
 
         let msg = command_to_message(
-            WsCommand::Commit { utterance_duration_ms: Some(1234) },
+            WsCommand::Commit { committed_audio_ms: Some(1234) },
             &mut durs,
         )
         .unwrap();
