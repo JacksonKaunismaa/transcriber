@@ -640,8 +640,8 @@ mod tests {
     }
 
     /// A completion arriving for a queue-skipped item shortly after the skip
-    /// must still be typed (INCIDENTS.md 2026-07-14: previously it was
-    /// logged and silently lost).
+    /// must still be typed (2026-07-14 incident: previously it was logged
+    /// and silently lost).
     #[tokio::test]
     async fn skipped_item_recovered_when_fresh() {
         let (ttx, mut trx) = mpsc::channel(8);
@@ -734,22 +734,23 @@ mod tests {
     }
 
     /// Pins the wps calibration against committed-audio durations. The
-    /// "real" cases are verbatim drops from production logs (2026-07-18 /
-    /// 2026-07-12) that the old speech-only estimate rejected at 34 and 11 wps;
-    /// paired with the audio actually committed they must pass. The
-    /// hallucination cases are the fluent blobs from 2026-04 that neither the
-    /// yaml patterns nor the unique-ratio check caught — the speed rule is the
-    /// only defense for that class and must keep firing.
+    /// "real" cases mirror the word count and committed-audio length of two
+    /// production false drops (2026-07-18: 12 words / 2250ms, rejected at 34
+    /// wps by the old speech-only estimate; 2026-07-12: 14 words / 2225ms,
+    /// rejected at 11 wps). The hallucination case mirrors a 2026-04 fluent
+    /// blob (30 words / ~1.7s) that neither the yaml patterns nor the
+    /// unique-ratio check caught — the speed rule is the only defense for
+    /// that class and must keep firing.
     #[test]
     fn speed_rule_calibrated_against_committed_audio() {
         // 12 words / 2250ms committed (logged as "2250ms buffer / ~352ms speech").
         assert!(!is_repetition_hallucination(
-            "a bunch of ideas at the bar and see what's six. So",
+            "please rerun the eval with the new config and paste the numbers",
             Some(2250)
         ));
         // 14 words / 2225ms committed (logged as "~1248ms speech").
         assert!(!is_repetition_hallucination(
-            "Okay, so like in my head the way this thing works is that um",
+            "can you move the second helper into its own file and add a docstring",
             Some(2225)
         ));
         // Fastest real speech observed over 6,393 transcripts: 6.3 wps. Anything
@@ -758,15 +759,15 @@ mod tests {
             "one two three four five six seven eight nine ten eleven twelve thirteen fourteen",
             Some(2225)
         ));
-        // 30 words over ~1.9s of committed audio (server-VAD era, 2026-04-09).
+        // 30 fluent, non-repetitive words over ~1.7s of committed audio.
         assert!(is_repetition_hallucination(
-            "How do you guys feel? Flip your palms to your left, flip your palms to the right. \
-             Start from the top of your thighs. Both legs. One more, one more.",
+            "and that wraps up everything for today so make sure you come back next time \
+             for more tips and tutorials and as always take care of yourselves and each other",
             Some(1740)
         ));
         // No duration => speed rule can't fire (only the unique-ratio check remains).
         assert!(!is_repetition_hallucination(
-            "a bunch of ideas at the bar and see what's six. So",
+            "please rerun the eval with the new config and paste the numbers",
             None
         ));
     }
@@ -783,10 +784,11 @@ mod tests {
         )));
         assert!(!state.filters.hallucinations.is_empty(), "filters.yaml should have loaded");
 
-        // 2026-04-09 hallucination: the pattern removes the outro clause and the
-        // 50% rule drops the remainder.
+        // Outro with a qualifier between "your" and "comments" (the shape that
+        // slipped the old literal pattern): the clause is removed and the 50%
+        // rule drops the remainder.
         assert_eq!(
-            filter_text(&state, "Make sure you try it and leave your senior comments below."),
+            filter_text(&state, "Try it yourself at home and leave your honest comments below."),
             ""
         );
         assert_eq!(filter_text(&state, "Please leave a comment below!"), "");

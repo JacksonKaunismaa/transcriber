@@ -181,7 +181,7 @@ impl VadDebugWriter {
         // In-place rewrite (truncate + write), NOT tmp + rename: replacing the
         // file swaps its inode, which kills inotify watches — the overlay's
         // FileView then misses updates and its stale-detector blinks the panel
-        // off mid-dictation (INCIDENTS.md 2026-07-28). A torn read during the
+        // off mid-dictation (2026-07-28 blink incident). A torn read during the
         // non-atomic window is tolerated by the reader (parse-failure retry).
         if let Err(e) = std::fs::write(&self.out_path, &bytes) {
             warn!("vad_debug: write failed: {e}");

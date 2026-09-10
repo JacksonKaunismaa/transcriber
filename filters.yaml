@@ -52,7 +52,7 @@ hallucinations:
     comment: "YouTube outro: end this video"
   - pattern: '(?:Please\s+)?leave (?:a|your)(?:\s+\w+){0,2}\s+comments? below(?:[!\.]\s*|\s*$)'
     flags: ignorecase
-    comment: "YouTube outro: leave a/your (senior/...) comment(s) below — end-of-clause only, so 'leave your comments below the function' survives (2026-04-09 'Make sure you try it and leave your senior comments below.' slipped every filter once the speed rule moved to committed-audio)"
+    comment: "YouTube outro: leave a/your (<qualifier>) comment(s) below — end-of-clause only, so dictated 'leave your comments below the function' survives. Widened 2026-09-09 from the literal 'Please leave a comment below' after a 'leave your <adj> comments below' variant passed every filter"
   - pattern: '(?:Like,?\s*)?(?:comment,?\s*)?(?:and\s+)?subscribe\b.*?[\.!]\s*'
     flags: ignorecase
     comment: "YouTube outro: like/comment/subscribe"

@@ -13,7 +13,7 @@ Transcription uses gpt-realtime-whisper by default; --model switches the
 engine (e.g. gpt-live-transcribe, its 2026 successor). Local Silero VAD
 endpoints utterances since the server rejects turn_detection for
 gpt-realtime-whisper; manual commits verified working for
-gpt-live-transcribe too (scratch/test_live_transcribe_smoke.py).
+gpt-live-transcribe too.
 
 The --delay flag controls server-side latency/accuracy tradeoff:
   minimal | low | medium | high | xhigh

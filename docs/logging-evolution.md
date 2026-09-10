@@ -333,7 +333,7 @@ fallback-related fields no longer mean anything:
   with no failures recorded); just connection state + ping EMA.
 
 The parked fallback `MetricsEvent` variants are kept as no-ops so they
-can be re-wired if the fallback is revived (see `INCIDENTS.md`).
+can be re-wired if the fallback is revived.
 
 ### Version 6: Backpressure fields (Jul 18, 2026 -- present)
 
@@ -343,7 +343,7 @@ METRICS [3m] | rss:70MB | ping ema:130ms | rtt - | 5m: rt:0 filt:0 | 15m: rt:0 f
 
 Purely additive tail after the errors block (v5 field extractors keep
 working), added with the network-backpressure hardening (commit
-`56abaad`, INCIDENTS.md "Network backpressure freezes audio pipeline"):
+`56abaad`, the network-backpressure incident):
 
 - `backlog:Xms` — gauge: audio waiting in the router's local SendQueue
   because the websocket can't keep up. Nonzero during dictation means

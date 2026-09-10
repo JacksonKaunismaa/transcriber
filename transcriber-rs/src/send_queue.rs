@@ -5,7 +5,7 @@
 //! ws_cmd channel fills. A blocking `send().await` there freezes the whole
 //! router select loop — VAD stops, the debug snapshot goes stale (the bar
 //! overlay hides itself), and the capture-gap detector false-fires on
-//! recovery, force-committing mid-utterance (INCIDENTS.md 2026-07-18).
+//! recovery, force-committing mid-utterance (2026-07-18 congestion incident).
 //!
 //! Instead, commands overflow into this local FIFO and are flushed
 //! opportunistically as the channel frees up. Beyond a bounded backlog the

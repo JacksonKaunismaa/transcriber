@@ -20,7 +20,7 @@ const SILERO_FRAME_24K: usize = (SAMPLE_RATE as usize * 32) / 1000; // 768
 
 /// Start threshold: a frame with prob above this counts toward triggering
 /// `SpeechStarted`. Lowered from 0.5 → 0.4 on 2026-05-22 after misses with
-/// peak ~0.48-0.49. See INCIDENTS.md → "Soft speech missed by Silero VAD".
+/// peak ~0.48-0.49 (quiet, short commands were going undetected).
 const SPEECH_START_THRESHOLD: f32 = 0.4;
 
 /// Continue threshold (hysteresis): once `in_speech`, the silence counter
@@ -77,7 +77,7 @@ const PREFIX_BUFFER_BYTES: usize =
 
 /// Rolling local buffer of recent audio, kept independent of VAD state. This
 /// is the storage layer the whisper-1 REST fallback would slice from if
-/// revived (see INCIDENTS.md). Keeping it filled now means that *if* the
+/// revived. Keeping it filled now means that *if* the
 /// post-deploy monitoring shows the realtime path drops commits, we can wire
 /// up the REST fallback without retroactively losing audio.
 ///
@@ -111,7 +111,7 @@ struct VadState {
     /// Rolling buffer of the most recent ~FALLBACK_BUFFER_SECONDS of audio,
     /// timestamped per chunk. Filled regardless of VAD state. Currently
     /// unused by any read path — kept ready in case the post-deploy
-    /// monitoring (INCIDENTS.md) shows we need to revive the whisper-1
+    /// monitoring shows we need to revive the whisper-1
     /// REST fallback for commits that never get `.completed` back. Without
     /// this, reviving the fallback would require retroactively re-capturing
     /// audio that's already been dropped.

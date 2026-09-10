@@ -42,15 +42,16 @@ pub enum TranscriptEvent {
     RealtimeCompleted {
         item_id: String,
         transcript: String,
-        /// Speech duration in ms, measured by local VAD (excludes pre-speech
-    /// prefix and post-speech silence — see WsCommand::Commit docs). Used
-    /// by the wps-based hallucination filter.
-    duration_ms: Option<u64>,
+        /// Committed-audio length in ms for this item (pre-speech prefix +
+        /// speech + trailing silence — see `WsCommand::Commit`). Used by the
+        /// wps-based hallucination filter.
+        duration_ms: Option<u64>,
     },
     /// Partial transcription delta from the Realtime API
     RealtimeDelta { delta: String },
-    /// Parked: completed transcription from whisper-1 REST fallback. See
-    /// INCIDENTS.md for the monitoring plan that may revive this.
+    /// Parked: completed transcription from whisper-1 REST fallback. Kept
+    /// so the fallback can be revived if commit→completion monitoring shows
+    /// the realtime path dropping commits.
     #[allow(dead_code)]
     FallbackCompleted {
         item_id: String,
@@ -85,7 +86,7 @@ pub enum MetricsEvent {
     CaptureDropped { chunks: u64 },
     RealtimeTranscription,
     // Parked fallback variants — kept so the whisper-1 REST fallback can be
-    // revived without re-defining the enum. See INCIDENTS.md.
+    // revived without re-defining the enum.
     #[allow(dead_code)]
     Timeout,
     #[allow(dead_code)]

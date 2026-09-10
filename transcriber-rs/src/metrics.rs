@@ -242,7 +242,7 @@ impl Metrics {
             }
             // Parked variants — kept as no-ops so the events can be sent
             // again without compile errors if the fallback is revived.
-            // See messages.rs and INCIDENTS.md.
+            // See messages.rs.
             MetricsEvent::Timeout
             | MetricsEvent::FallbackSuccess
             | MetricsEvent::FallbackFailure { .. }

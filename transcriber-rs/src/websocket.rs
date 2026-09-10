@@ -490,8 +490,8 @@ async fn do_connection(
 /// Convert a router command into its wire message. For commits, records the
 /// local-VAD utterance duration in the FIFO that `conversation.item.created`
 /// pops — this MUST happen exactly once per commit forwarded, in forward
-/// order, or every later item inherits the wrong duration (the desync class
-/// from INCIDENTS.md 2026-07-14).
+/// order, or every later item inherits the wrong duration (the 2026-07-14
+/// FIFO-desync incident).
 fn command_to_message(
     cmd: WsCommand,
     pending_durations: &mut std::collections::VecDeque<Option<u64>>,
@@ -519,7 +519,7 @@ fn command_to_message(
 /// gateway answers pings lazily during active streaming (pongs observed
 /// 5-20s behind while transcriptions round-trip in ~500ms), so a healthy
 /// connection under dictation routinely has >10s-old unanswered pings
-/// (2026-07-18 evening regression — see INCIDENTS.md).
+/// (2026-07-18 evening regression: the pong timeout killed live connections).
 fn connection_silent(
     last_ping: Option<std::time::Instant>,
     last_inbound: std::time::Instant,
@@ -580,7 +580,7 @@ async fn handle_server_event(
                     // A creation event with no item id can never be matched
                     // by a .completed — discard its queued duration so later
                     // items don't inherit the wrong one (same desync class as
-                    // INCIDENTS.md 2026-07-14).
+                    // the 2026-07-14 incident).
                     let stale = pending_durations.pop_front().flatten();
                     warn!(
                         "conversation.item event without item id — discarding queued duration {stale:?}"
@@ -652,8 +652,8 @@ async fn handle_server_event(
                 }
                 // A rejected commit never produces item.created, which would
                 // leave its duration stuck at the FIFO head and shift every
-                // later item's duration (the desync class from INCIDENTS.md
-                // 2026-07-14). Errors don't reconnect (see EventAction::Error
+                // later item's duration (the 2026-07-14 desync class). Errors
+                // don't reconnect (see EventAction::Error
                 // handling), so discard the orphaned duration here.
                 if err.code == "input_audio_buffer_commit_empty" {
                     let stale = pending_durations.pop_front().flatten();
@@ -719,8 +719,8 @@ mod tests {
         got
     }
 
-    /// Replay of the 2026-07-14 incident (INCIDENTS.md: "Real speech dropped
-    /// when one completion arrives late"). One stalled completion must not
+    /// Replay of the 2026-07-14 incident (real speech dropped when one
+    /// completion arrived late). One stalled completion must not
     /// shift other items' durations. With the old positional FIFO, item B
     /// ("Um") got A's 19934ms, C (a real 95-word utterance) got B's 160ms —
     /// tripping the >=10 wps speed-hallucination filter and dropping it.
@@ -817,7 +817,7 @@ mod tests {
     /// Forwarding a Commit must record its duration exactly once and emit
     /// the commit frame; forwarding audio must not touch the duration FIFO.
     /// This pairing invariant is what keeps late completions correctly
-    /// attributed (INCIDENTS.md 2026-07-14).
+    /// attributed (2026-07-14 incident).
     #[tokio::test]
     async fn command_forwarding_preserves_duration_pairing() {
         let mut durs = std::collections::VecDeque::new();
