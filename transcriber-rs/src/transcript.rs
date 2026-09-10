@@ -770,4 +770,36 @@ mod tests {
             None
         ));
     }
+
+    /// Runs the shipped filters.yaml through the real filter path.
+    #[test]
+    fn leave_comments_below_outro_is_filtered_but_dictation_survives() {
+        let (type_tx, _trx) = mpsc::channel(8);
+        let (metrics_tx, _mrx) = mpsc::channel(8);
+        let mut state = test_state(type_tx, metrics_tx);
+        state.filters = Filters::load(&PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../filters.yaml"
+        )));
+        assert!(!state.filters.hallucinations.is_empty(), "filters.yaml should have loaded");
+
+        // 2026-04-09 hallucination: the pattern removes the outro clause and the
+        // 50% rule drops the remainder.
+        assert_eq!(
+            filter_text(&state, "Make sure you try it and leave your senior comments below."),
+            ""
+        );
+        assert_eq!(filter_text(&state, "Please leave a comment below!"), "");
+        assert_eq!(filter_text(&state, "Leave your comments below"), "");
+
+        // Dictation that happens to contain the phrase mid-clause must not be touched.
+        assert_eq!(
+            filter_text(&state, "leave your comments below the function"),
+            "leave your comments below the function"
+        );
+        assert_eq!(
+            filter_text(&state, "Can you leave a comment below that line explaining the retry?"),
+            "Can you leave a comment below that line explaining the retry?"
+        );
+    }
 }
