@@ -90,6 +90,29 @@ sudo pacman -S xdotool
 
 The tool automatically detects your display server. On Wayland, it uses Shift+Insert paste (via wl-copy and wtype) which is faster and more reliable than keystroke simulation. On X11, it uses xdotool.
 
+### 4b. macOS instead
+
+No extra packages: the same `cargo build --release` produces a Mac binary
+that pastes each utterance with a synthetic Cmd+V through the clipboard.
+Whatever you had copied (text, images, files) is snapshotted first and put
+back after the paste. The V key is looked up in the active keyboard layout, so
+Dvorak and other layouts paste correctly.
+
+- **Accessibility permission** for the app that launches the transcriber (your
+  terminal, or the hotkey tool): System Settings → Privacy & Security →
+  Accessibility. Without it macOS drops the keystroke silently, so the
+  transcriber checks on every paste and logs an error instead.
+- **Microphone permission** for that same app (macOS asks on first run).
+- **API key from 1Password** (optional, instead of `.env`): enable
+  1Password → Settings → Developer → *Integrate with 1Password CLI*, then
+  `cp .env.tpl.example .env.tpl` and point the `op://` reference at your key.
+  `scripts/toggle_transcribe.sh` runs the binary under `op run` whenever
+  `.env.tpl` exists, so the key lives only in that process.
+- Per-app typing rules go in `typer_rules.macos.yaml`, matched against bundle
+  IDs (`lsappinfo info -only bundleID "$(lsappinfo front)"` shows the focused
+  app's).
+- The Quickshell widgets and the VAD sparkline are Linux-only.
+
 ## Usage
 
 Run the binary from the project root (so it can find `filters.yaml` and `.env`):
