@@ -103,6 +103,13 @@ Dvorak and other layouts paste correctly.
   Accessibility. Without it macOS drops the keystroke silently, so the
   transcriber checks on every paste and logs an error instead.
 - **Microphone permission** for that same app (macOS asks on first run).
+- **Hotkey:** hotkey tools like Karabiner can't hold either permission (from
+  Karabiner the transcriber silently hears nothing and can't paste). Build the
+  launcher with `macos/build.sh` and bind the hotkey to
+  `open -n -g /path/to/transcriber/macos/Transcriber.app`. It runs
+  `scripts/toggle_transcribe.sh` and stays open while the transcriber runs, so
+  macOS asks about *Transcriber*. Add it under Accessibility; it asks for the
+  microphone on first start.
 - **API key from 1Password** (optional, instead of `.env`): enable
   1Password → Settings → Developer → *Integrate with 1Password CLI*, then
   `cp .env.tpl.example .env.tpl` and point the `op://` reference at your key.
