@@ -44,6 +44,13 @@ send_notification() {
     fi
 }
 
+# Redraw the SketchyBar indicator (macOS bar; no-op without sketchybar).
+# $1: starting | running | stopped
+refresh_bar() {
+    command -v sketchybar >/dev/null 2>&1 &&
+        sketchybar --trigger transcriber_change STATE="$1"
+}
+
 # Check if transcription is already running
 if [ -f "$PID_FILE" ]; then
     PID=$(cat "$PID_FILE")
@@ -67,6 +74,7 @@ if [ -f "$PID_FILE" ]; then
         fi
 
         rm -f "$PID_FILE"
+        refresh_bar stopped
         send_notification "Transcription" "Stopped" "media-playback-stop"
         exit 0
     else
@@ -103,6 +111,7 @@ if [ -f .env.tpl ]; then
     # shell records its own PID and then execs the transcriber, so the PID file
     # names the transcriber (which dump_audio.sh/mic-toggle signal), not op.
     rm -f "$PID_FILE"
+    refresh_bar starting
     # shellcheck disable=SC2016  # $$/$0/$@ expand in the inner shell
     nohup op run --env-file=.env.tpl -- \
         /bin/bash -c 'echo $$ > "$0"; exec "$@"' "$PID_FILE" $TRANSCRIBER \
@@ -117,6 +126,7 @@ if [ -f .env.tpl ]; then
     PID=$(cat "$PID_FILE" 2>/dev/null)
     if [ -z "$PID" ]; then
         kill -TERM "$OP_PID" 2>/dev/null
+        refresh_bar stopped
         send_notification "Transcription" "Failed to start - 1Password didn't release the key (see .transcribe.log)" "dialog-error"
         exit 1
     fi
@@ -132,9 +142,11 @@ sleep 1
 
 # Check if it actually started
 if kill -0 "$PID" 2>/dev/null; then
+    refresh_bar running
     send_notification "Transcription" "Started - Speak into your microphone" "media-playback-start"
 else
     rm -f "$PID_FILE"
+    refresh_bar stopped
     send_notification "Transcription" "Failed to start - check logs" "dialog-error"
     exit 1
 fi
