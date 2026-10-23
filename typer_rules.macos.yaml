@@ -1,0 +1,10 @@
+# macOS: app bundle ID -> typing method mapping (typer_rules.yaml is the
+# Hyprland version, keyed by window class).
+# Methods: cmd-v (paste via the clipboard, previous clipboard restored after)
+# Matching: substring (case-insensitive), first match wins
+# Find an app's bundle ID: lsappinfo info -only bundleID "$(lsappinfo front)"
+# File is reloaded automatically when modified
+
+rules: []
+
+default: cmd-v

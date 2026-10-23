@@ -1,5 +1,7 @@
 mod backends;
 mod detection;
+#[cfg(target_os = "macos")]
+mod macos;
 
 use std::sync::{Arc, Mutex};
 
@@ -24,21 +26,14 @@ pub async fn run_typer_task(
     let detector = Arc::new(Mutex::new(WindowDetector::new()));
 
     // Print initial status
-    let status = if detection::test_adaptive() {
-        "Keyboard typing: adaptive (per typer_rules.yaml)"
-    } else {
-        "Keyboard typing: not available (missing wl-copy/wtype/hyprctl)"
-    };
-    println!("[INFO] {status}");
-
-    if !detection::test_adaptive() {
-        eprintln!(
-            "[WARNING] Keyboard typing not available!\n\
-             Adaptive typing requires:\n  \
-             - wl-copy: sudo pacman -S wl-clipboard\n  \
-             - wtype: sudo pacman -S wtype\n  \
-             - hyprctl: comes with Hyprland"
+    if detection::test_adaptive() {
+        println!(
+            "[INFO] Keyboard typing: adaptive (per {})",
+            detection::RULES_FILE
         );
+    } else {
+        println!("[INFO] Keyboard typing: not available");
+        eprintln!("[WARNING] Keyboard typing not available!\n{}", detection::TYPING_REQUIREMENTS);
     }
 
     loop {

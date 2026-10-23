@@ -1,13 +1,47 @@
 use std::path::{Path, PathBuf};
+#[cfg(not(target_os = "macos"))]
 use std::process::Command;
 
+#[cfg(not(target_os = "macos"))]
 use anyhow::{Context, Result};
 use serde::Deserialize;
+#[cfg(not(target_os = "macos"))]
 use tracing::warn;
 
+#[cfg(target_os = "macos")]
+pub use super::macos::WindowDetector;
+
+/// Per-platform rules file: window classes on Hyprland, bundle IDs on macOS.
+#[cfg(not(target_os = "macos"))]
+pub const RULES_FILE: &str = "typer_rules.yaml";
+#[cfg(target_os = "macos")]
+pub const RULES_FILE: &str = "typer_rules.macos.yaml";
+
+#[cfg(not(target_os = "macos"))]
+const DEFAULT_METHOD: &str = "wtype";
+#[cfg(target_os = "macos")]
+const DEFAULT_METHOD: &str = "cmd-v";
+
+#[cfg(not(target_os = "macos"))]
+pub const TYPING_REQUIREMENTS: &str = "Adaptive typing requires:
+  - wl-copy: sudo pacman -S wl-clipboard
+  - wtype: sudo pacman -S wtype
+  - hyprctl: comes with Hyprland";
+#[cfg(target_os = "macos")]
+pub const TYPING_REQUIREMENTS: &str = "Pasting needs the Accessibility permission for the app that \
+launched the transcriber (your terminal, or the hotkey launcher):
+  System Settings > Privacy & Security > Accessibility, then restart the transcriber";
+
 /// Check if adaptive typing tools are available.
+#[cfg(not(target_os = "macos"))]
 pub fn test_adaptive() -> bool {
     which("wl-copy") && which("wtype") && which("hyprctl")
+}
+
+/// On macOS the tools are built in; what can be missing is the permission.
+#[cfg(target_os = "macos")]
+pub fn test_adaptive() -> bool {
+    super::macos::accessibility_trusted()
 }
 
 /// Focused-window lookup via `hyprctl`, resilient to Hyprland restarting
@@ -22,24 +56,28 @@ pub fn test_adaptive() -> bool {
 /// default wtype path with nothing logged. On failure we now re-resolve the
 /// live instance via `hyprctl instances -j` (which scans the runtime dir and
 /// doesn't need the env var) and retry with `-i <signature>`.
+#[cfg(not(target_os = "macos"))]
 pub struct WindowDetector {
     /// Instance signature to pass as `hyprctl -i`, set once the inherited env
     /// var has been found stale.
     instance_override: Option<String>,
 }
 
+#[cfg(not(target_os = "macos"))]
 #[derive(Deserialize)]
 struct WindowInfo {
     #[serde(default)]
     class: String,
 }
 
+#[cfg(not(target_os = "macos"))]
 #[derive(Deserialize)]
 struct InstanceInfo {
     instance: String,
     time: u64,
 }
 
+#[cfg(not(target_os = "macos"))]
 impl WindowDetector {
     pub fn new() -> Self {
         Self {
@@ -134,18 +172,18 @@ struct RulesConfig {
 }
 
 fn default_method() -> String {
-    "wtype".into()
+    DEFAULT_METHOD.into()
 }
 
 impl TyperRules {
     pub fn load(config_path: Option<&Path>) -> Self {
         let path = config_path
             .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("typer_rules.yaml"));
+            .unwrap_or_else(|| PathBuf::from(RULES_FILE));
 
         let mut rules = TyperRules {
             rules: Vec::new(),
-            default: "wtype".into(),
+            default: DEFAULT_METHOD.into(),
             config_path: path,
             mtime: None,
         };
@@ -184,6 +222,7 @@ impl TyperRules {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn which(cmd: &str) -> bool {
     Command::new("which")
         .arg(cmd)

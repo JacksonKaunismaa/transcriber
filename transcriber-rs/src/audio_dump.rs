@@ -85,11 +85,23 @@ fn notify(summary: &str, body: &str) {
     let summary = summary.to_string();
     let body = body.to_string();
     std::thread::spawn(move || {
+        #[cfg(not(target_os = "macos"))]
         let result = std::process::Command::new("notify-send")
             .args(["--app-name=transcriber", "--expire-time=4000", &summary, &body])
             .status();
+        // Texts go in as argv, not spliced into the script, so quotes in the
+        // path can't break the AppleScript.
+        #[cfg(target_os = "macos")]
+        let result = std::process::Command::new("osascript")
+            .args([
+                "-e", "on run argv",
+                "-e", "display notification (item 2 of argv) with title (item 1 of argv)",
+                "-e", "end run",
+                &summary, &body,
+            ])
+            .status();
         if let Err(e) = result {
-            warn!("audio_dump: notify-send failed: {e}");
+            warn!("audio_dump: desktop notification failed: {e}");
         }
     });
 }

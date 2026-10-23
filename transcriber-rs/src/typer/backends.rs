@@ -4,7 +4,7 @@ use anyhow::Result;
 
 /// Chunk size: 801 chars shows actual text in Claude Code,
 /// 802+ triggers "[Pasted text]" display.
-const CHUNK_SIZE: usize = 801;
+pub(super) const CHUNK_SIZE: usize = 801;
 
 /// Characters that are unsafe at keycode position 22 in wtype.
 const UNSAFE_AT_22: &str = " !\"#$'()*+,-./:;=>?@[\\]^_";
@@ -12,6 +12,8 @@ const UNSAFE_AT_22: &str = " !\"#$'()*+,-./:;=>?@[\\]^_";
 /// Dispatch to the appropriate typing backend.
 pub fn type_with_adaptive(text: &str, method: &str) -> Result<()> {
     match method {
+        #[cfg(target_os = "macos")]
+        "cmd-v" => super::macos::type_with_cmd_v(text),
         "shift-insert" => type_with_shift_insert(text),
         "wtype" => type_with_wtype(text),
         "middle-click" => type_with_middle_click(text),
@@ -170,7 +172,7 @@ fn split_for_wtype_keycode22(text: &str) -> Vec<String> {
     chunks
 }
 
-fn chunk_text(text: &str, chunk_size: usize) -> Vec<&str> {
+pub(super) fn chunk_text(text: &str, chunk_size: usize) -> Vec<&str> {
     let mut chunks = Vec::new();
     let mut start = 0;
     let bytes = text.as_bytes();

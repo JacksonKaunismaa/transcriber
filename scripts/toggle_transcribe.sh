@@ -7,6 +7,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_FILE="$SCRIPT_DIR/.transcribe.pid"
 LOG_FILE="$SCRIPT_DIR/.transcribe.log"
 
+# Hotkey launchers (Karabiner on macOS) run us with a bare PATH
+if [ "$(uname)" = "Darwin" ]; then
+    export PATH="/opt/homebrew/bin:$PATH"
+fi
+
 # Function to send notifications
 # Uses --app-icon (not --icon) because --icon maps to the image-path D-Bus
 # hint, which Quickshell renders on top of a Material Symbol background.
@@ -15,6 +20,13 @@ send_notification() {
     local title="$1"
     local message="$2"
     local icon="$3"
+
+    if [ "$(uname)" = "Darwin" ]; then
+        osascript -e 'on run argv' \
+            -e 'display notification (item 2 of argv) with title (item 1 of argv)' \
+            -e 'end run' "$title" "$message" 2>/dev/null
+        return
+    fi
 
     # Set DBUS_SESSION_BUS_ADDRESS if not set (for KDE keybindings)
     if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
@@ -38,7 +50,9 @@ if [ -f "$PID_FILE" ]; then
 
     # Check if the process is actually running
     if kill -0 "$PID" 2>/dev/null; then
-        # Process is running, stop it
+        # Process is running, stop it. Under `op run` the PID is op's, so
+        # signal the transcriber child directly too.
+        pkill -TERM -P "$PID" 2>/dev/null
         kill -TERM "$PID"
 
         # Wait up to 5 seconds for graceful shutdown
@@ -84,6 +98,12 @@ fi
 # A/B trial (2026-08-18): run the newer OpenAI model. Delete this line to
 # revert the keybind to the default gpt-realtime-whisper.
 TRANSCRIBER="$TRANSCRIBER --model gpt-live-transcribe"
+
+# Resolve OPENAI_API_KEY from 1Password for this process only: .env.tpl holds
+# op:// references, never the key (see .env.tpl.example)
+if [ -f .env.tpl ]; then
+    TRANSCRIBER="op run --env-file=.env.tpl -- $TRANSCRIBER"
+fi
 
 # Start transcription in background and save PID
 nohup $TRANSCRIBER > "$LOG_FILE" 2>&1 &

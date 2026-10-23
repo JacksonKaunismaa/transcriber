@@ -407,6 +407,7 @@ pub async fn run_metrics_task(
 }
 
 /// Read RSS from /proc/self/status (Linux only).
+#[cfg(not(target_os = "macos"))]
 fn get_rss_mb() -> f64 {
     std::fs::read_to_string("/proc/self/status")
         .ok()
@@ -417,6 +418,18 @@ fn get_rss_mb() -> f64 {
                 .and_then(|v| v.parse::<f64>().ok())
                 .map(|kb| kb / 1024.0)
         })
+        .unwrap_or(0.0)
+}
+
+/// Read RSS via `ps` (macOS has no /proc). Called once per stats line.
+#[cfg(target_os = "macos")]
+fn get_rss_mb() -> f64 {
+    std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<f64>().ok())
+        .map(|kb| kb / 1024.0)
         .unwrap_or(0.0)
 }
 
