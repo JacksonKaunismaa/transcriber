@@ -50,9 +50,7 @@ if [ -f "$PID_FILE" ]; then
 
     # Check if the process is actually running
     if kill -0 "$PID" 2>/dev/null; then
-        # Process is running, stop it. Under `op run` the PID is op's, so
-        # signal the transcriber child directly too.
-        pkill -TERM -P "$PID" 2>/dev/null
+        # Process is running, stop it
         kill -TERM "$PID"
 
         # Wait up to 5 seconds for graceful shutdown
@@ -99,17 +97,35 @@ fi
 # revert the keybind to the default gpt-realtime-whisper.
 TRANSCRIBER="$TRANSCRIBER --model gpt-live-transcribe"
 
-# Resolve OPENAI_API_KEY from 1Password for this process only: .env.tpl holds
-# op:// references, never the key (see .env.tpl.example)
 if [ -f .env.tpl ]; then
-    TRANSCRIBER="op run --env-file=.env.tpl -- $TRANSCRIBER"
+    # Resolve OPENAI_API_KEY from 1Password for this process only: .env.tpl
+    # holds op:// references, never the key (see .env.tpl.example). The inner
+    # shell records its own PID and then execs the transcriber, so the PID file
+    # names the transcriber (which dump_audio.sh/mic-toggle signal), not op.
+    rm -f "$PID_FILE"
+    # shellcheck disable=SC2016  # $$/$0/$@ expand in the inner shell
+    nohup op run --env-file=.env.tpl -- \
+        /bin/bash -c 'echo $$ > "$0"; exec "$@"' "$PID_FILE" $TRANSCRIBER \
+        > "$LOG_FILE" 2>&1 &
+    OP_PID=$!
+    # Wait while 1Password asks for Touch ID (up to 60s)
+    for _ in $(seq 600); do
+        [ -s "$PID_FILE" ] && break
+        kill -0 "$OP_PID" 2>/dev/null || break
+        sleep 0.1
+    done
+    PID=$(cat "$PID_FILE" 2>/dev/null)
+    if [ -z "$PID" ]; then
+        kill -TERM "$OP_PID" 2>/dev/null
+        send_notification "Transcription" "Failed to start - 1Password didn't release the key (see .transcribe.log)" "dialog-error"
+        exit 1
+    fi
+else
+    # Start transcription in background and save PID
+    nohup $TRANSCRIBER > "$LOG_FILE" 2>&1 &
+    PID=$!
+    echo "$PID" > "$PID_FILE"
 fi
-
-# Start transcription in background and save PID
-nohup $TRANSCRIBER > "$LOG_FILE" 2>&1 &
-PID=$!
-
-echo "$PID" > "$PID_FILE"
 
 # Give it a moment to start
 sleep 1

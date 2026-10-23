@@ -18,7 +18,10 @@ pub fn type_with_adaptive(text: &str, method: &str) -> Result<()> {
         "wtype" => type_with_wtype(text),
         "middle-click" => type_with_middle_click(text),
         "ydotool" => type_with_ydotool(text),
+        #[cfg(not(target_os = "macos"))]
         _ => type_with_wtype(text),
+        #[cfg(target_os = "macos")]
+        other => anyhow::bail!("unknown typing method {other:?} in typer_rules.macos.yaml"),
     }
 }
 
