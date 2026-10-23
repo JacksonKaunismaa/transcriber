@@ -44,6 +44,129 @@ const HEALTHY_RESET_SECS: u64 = 30;
 /// Delay before attempting to rebuild a broken stream.
 const REBUILD_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// Converts a device's native capture format to the 24kHz mono i16 the
+/// pipeline expects. PipeWire resamples for us on Linux, so this only runs
+/// when a device refuses 24kHz mono outright (CoreAudio: the MacBook mic only
+/// opens at its native 48kHz).
+///
+/// Channels are averaged to mono, then each output sample is the mean of the
+/// input samples that fall in its 1/24000 s slot. The box average doubles as
+/// the anti-aliasing low-pass, so 12-24kHz content isn't folded into speech.
+struct Downsampler {
+    in_rate: u64,
+    channels: usize,
+    in_index: u64,
+    slot: u64,
+    sum: f32,
+    count: u32,
+}
+
+impl Downsampler {
+    fn new(in_rate: u32, channels: u16) -> Self {
+        Self {
+            in_rate: u64::from(in_rate),
+            channels: usize::from(channels),
+            in_index: 0,
+            slot: 0,
+            sum: 0.0,
+            count: 0,
+        }
+    }
+
+    /// Feed interleaved samples in [-1, 1]; completed output samples are
+    /// appended to `out`. A partly filled slot carries over to the next call.
+    fn push(&mut self, interleaved: impl Iterator<Item = f32>, out: &mut Vec<i16>) {
+        let mut frame_sum = 0.0;
+        for (i, sample) in interleaved.enumerate() {
+            frame_sum += sample;
+            if (i + 1) % self.channels != 0 {
+                continue;
+            }
+            let mono = frame_sum / self.channels as f32;
+            frame_sum = 0.0;
+
+            let slot = self.in_index * u64::from(TARGET_RATE) / self.in_rate;
+            if slot != self.slot && self.count > 0 {
+                let mean = self.sum / self.count as f32;
+                out.push((mean.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16);
+                self.sum = 0.0;
+                self.count = 0;
+            }
+            self.slot = slot;
+            self.sum += mono;
+            self.count += 1;
+            self.in_index += 1;
+        }
+    }
+}
+
+/// Open `device` in its own default format, converting to 24kHz mono i16 in
+/// the callback. Fallback for devices that reject the 24kHz mono configs.
+fn try_build_native_stream(
+    device: &cpal::Device,
+    tx: &mpsc::Sender<AudioChunk>,
+    metrics_tx: &mpsc::Sender<MetricsEvent>,
+    error_count: &Arc<AtomicU64>,
+) -> Result<cpal::Stream, String> {
+    let supported = device
+        .default_input_config()
+        .map_err(|e| format!("no default input config: {e}"))?;
+    let config = supported.config();
+    if config.sample_rate.0 < TARGET_RATE {
+        return Err(format!(
+            "native rate {}Hz is below the {TARGET_RATE}Hz the API needs",
+            config.sample_rate.0
+        ));
+    }
+    info!(
+        rate = config.sample_rate.0,
+        channels = config.channels,
+        format = ?supported.sample_format(),
+        "Opening device at its native format; downsampling to {TARGET_RATE}Hz mono"
+    );
+
+    let mut downsampler = Downsampler::new(config.sample_rate.0, config.channels);
+    let tx = tx.clone();
+    let metrics_tx = metrics_tx.clone();
+    let mut send = move |samples: &mut dyn Iterator<Item = f32>| {
+        let mut data = Vec::new();
+        downsampler.push(samples, &mut data);
+        if data.is_empty() {
+            return;
+        }
+        // try_send only (RT callback must not block); count losses as below.
+        if tx.try_send(AudioChunk { data }).is_err() {
+            let _ = metrics_tx.try_send(MetricsEvent::CaptureDropped { chunks: 1 });
+        }
+    };
+    let err_count = Arc::clone(error_count);
+    let on_error = move |err| {
+        let n = err_count.fetch_add(1, Ordering::Relaxed);
+        if n == 0 {
+            error!("Audio stream error: {err}");
+        }
+    };
+
+    let stream = match supported.sample_format() {
+        cpal::SampleFormat::F32 => device.build_input_stream(
+            &config,
+            move |data: &[f32], _: &cpal::InputCallbackInfo| send(&mut data.iter().copied()),
+            on_error,
+            None,
+        ),
+        cpal::SampleFormat::I16 => device.build_input_stream(
+            &config,
+            move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                send(&mut data.iter().map(|&x| f32::from(x) / 32768.0))
+            },
+            on_error,
+            None,
+        ),
+        other => return Err(format!("unsupported native sample format {other:?}")),
+    };
+    stream.map_err(|e| e.to_string())
+}
+
 /// Try all input devices and return the first working stream.
 fn try_build_stream(
     host: &cpal::Host,
@@ -128,6 +251,16 @@ fn try_build_stream(
                 Err(e) => {
                     warn!(device = %name, error = %e, "Failed to open, trying next");
                 }
+            }
+        }
+
+        match try_build_native_stream(&device, tx, metrics_tx, error_count) {
+            Ok(s) => {
+                info!(device = %name, "Audio device opened successfully (native format)");
+                return Some((s, name));
+            }
+            Err(e) => {
+                warn!(device = %name, error = %e, "Native-format fallback failed, trying next device");
             }
         }
     }
@@ -274,5 +407,43 @@ fn sleep_cancellable(cancel: &CancellationToken, duration: std::time::Duration) 
         let sleep = remaining.min(step);
         std::thread::sleep(sleep);
         remaining = remaining.saturating_sub(sleep);
+    }
+}
+
+#[cfg(test)]
+mod downsampler_tests {
+    use super::*;
+
+    #[test]
+    fn stereo_48k_becomes_mono_24k_with_levels_kept() {
+        let mut ds = Downsampler::new(48_000, 2);
+        let mut out = Vec::new();
+        // 1s of stereo: left 0.5, right 0.0 -> mono 0.25, fed in odd-sized callbacks
+        let input: Vec<f32> = (0..96_000).map(|i| if i % 2 == 0 { 0.5 } else { 0.0 }).collect();
+        for chunk in input.chunks(1022) {
+            ds.push(chunk.iter().copied(), &mut out);
+        }
+        // the final slot is still pending until more input arrives
+        assert_eq!(out.len(), 23_999);
+        let expected = (0.25 * f32::from(i16::MAX)) as i16;
+        assert!(out.iter().all(|&x| x == expected));
+    }
+
+    #[test]
+    fn non_integer_ratio_keeps_the_output_rate() {
+        let mut ds = Downsampler::new(44_100, 1);
+        let mut out = Vec::new();
+        ds.push(std::iter::repeat_n(0.0, 44_100 * 3), &mut out);
+        assert_eq!(out.len(), 3 * 24_000 - 1);
+    }
+
+    #[test]
+    fn box_average_cancels_a_nyquist_tone() {
+        // +1/-1 alternating at 48kHz is a 24kHz tone: inaudible to the API's
+        // band, so it must average out rather than alias into it.
+        let mut ds = Downsampler::new(48_000, 1);
+        let mut out = Vec::new();
+        ds.push((0..4_800).map(|i| if i % 2 == 0 { 1.0 } else { -1.0 }), &mut out);
+        assert!(out.iter().all(|&x| x == 0));
     }
 }
