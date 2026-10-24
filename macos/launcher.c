@@ -6,6 +6,7 @@
 // Runs scripts/toggle_transcribe.sh, then stays alive while the transcriber it started runs,
 // so the transcriber keeps a live parent app. Open it with `open -n -g` so a second press
 // starts a new instance (which stops the transcriber) and focus stays on your window.
+#include <ApplicationServices/ApplicationServices.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,15 @@
 int main(void) {
     const char *script = REPO "/scripts/toggle_transcribe.sh";
     const char *pid_path = REPO "/scripts/.transcribe.pid";
+
+    // Not yet allowed to paste: show macOS's own "would like to control this computer" dialog,
+    // which also adds Transcriber to the Accessibility list for the user to switch on.
+    const void *keys[] = {kAXTrustedCheckOptionPrompt};
+    const void *vals[] = {kCFBooleanTrue};
+    CFDictionaryRef opts = CFDictionaryCreate(NULL, keys, vals, 1, &kCFTypeDictionaryKeyCallBacks,
+                                              &kCFTypeDictionaryValueCallBacks);
+    AXIsProcessTrustedWithOptions(opts);
+    CFRelease(opts);
 
     pid_t child = fork();
     if (child < 0) {
