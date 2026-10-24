@@ -10,6 +10,6 @@ APP=Transcriber.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp Info.plist "$APP/Contents/Info.plist"
-clang -O2 -Wall -Wextra -DREPO="\"$REPO\"" -framework ApplicationServices -o "/Contents/MacOS/transcriber-launcher" launcher.c
+clang -O2 -Wall -Wextra -DREPO="\"$REPO\"" -framework ApplicationServices -o "$APP/Contents/MacOS/transcriber-launcher" launcher.c
 codesign --force --sign - --identifier local.transcriber.launcher "$APP"
 echo "built $PWD/$APP"
