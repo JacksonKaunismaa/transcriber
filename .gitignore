@@ -26,3 +26,4 @@ CLAUDE.md
 scripts/time_saved.png
 .claude/
 macos/Transcriber.app/
+.DS_Store
